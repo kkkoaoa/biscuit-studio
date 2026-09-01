@@ -1,20 +1,25 @@
 {
-  "extends": "@edenx/tsconfig/base",
   "compilerOptions": {
-    "declaration": false,
-    "jsx": "preserve",
-    "baseUrl": "./",
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"],
-      "@shared/*": ["./shared/*"]
+      "@/*": ["src/*"]
     },
-    "types": ["react", "react-dom"]
+    "types": ["vite/client"]
   },
-  "include": [
-    "src",
-    "shared",
-    "config",
-    "edenx.config.ts"
-  ],
-  "exclude": ["**/node_modules"]
+  "include": ["src", "vite.config.ts"]
 }

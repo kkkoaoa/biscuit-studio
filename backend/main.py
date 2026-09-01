@@ -12,14 +12,12 @@ from typing import Any, Dict, List, Optional
 import httpx
 import imageio_ffmpeg
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 LOGGER = logging.getLogger(__name__)
-JWT_HEADER = "x-jwt-token"
-DEFAULT_JWT_SERVER = "cloud.bytedance.net"
 DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 
 try:
@@ -38,12 +36,15 @@ def get_subtitle_credentials() -> Dict[str, str]:
     }
 
 
-class UserResponse(BaseModel):
-    username: str
-    region: str
-    name: str
-    avatar_url: str
-    terminated: bool
+def get_cors_origins() -> List[str]:
+    """Return the comma-separated browser origins allowed to call the API."""
+    default_origins = (
+        "http://localhost:3000,http://localhost:5173,"
+        "http://127.0.0.1:3000,http://127.0.0.1:5173"
+    )
+    configured_origins = os.environ.get("CORS_ORIGINS", default_origins)
+    origins = [origin.strip().rstrip("/") for origin in configured_origins.split(",") if origin.strip()]
+    return origins or default_origins.split(",")
 
 
 class CreateVideoRequest(BaseModel):
@@ -99,44 +100,6 @@ class ScriptResult(BaseModel):
     prompt: str
 
 
-def get_jwt_userinfo_url() -> str:
-    configured_url = os.environ.get("JWT_USERINFO_URL")
-    if configured_url:
-        return configured_url
-    jwt_server = os.environ.get("JWT_SERVER", DEFAULT_JWT_SERVER).strip().rstrip("/")
-    return "https://{}/auth/api/v1/userinfo".format(jwt_server)
-
-
-async def fetch_user_info(token: str) -> Optional[UserResponse]:
-    timeout_seconds = float(os.environ.get("JWT_USERINFO_TIMEOUT_SECONDS", "5"))
-    try:
-        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
-            response = await client.get(get_jwt_userinfo_url(), headers={JWT_HEADER: token})
-            response.raise_for_status()
-            return UserResponse.parse_obj(response.json())
-    except Exception as error:
-        LOGGER.warning("Unable to resolve current user from JWT: %s", error)
-        return None
-
-
-async def auth_middleware(request: Request, call_next):
-    public_paths = {"/api", "/api/v1/ping", "/reference/biscuit.png"}
-    if request.method == "OPTIONS" or request.url.path in public_paths:
-        return await call_next(request)
-    token = request.headers.get(JWT_HEADER)
-    if not token:
-        return JSONResponse(status_code=403, content={"detail": "unauthorized: missing or invalid jwt token"})
-    current_user = await fetch_user_info(token)
-    if current_user is None:
-        return JSONResponse(status_code=403, content={"detail": "unauthorized: missing or invalid jwt token"})
-    request.state.current_user = current_user
-    return await call_next(request)
-
-
-def setup_permissions(app: FastAPI) -> None:
-    app.middleware("http")(auth_middleware)
-
-
 def ark_headers(api_key: str) -> Dict[str, str]:
     token = api_key.strip()
     if token.lower().startswith("bearer "):
@@ -156,8 +119,6 @@ def ark_error(response: httpx.Response) -> HTTPException:
     safe_message = (message or "火山方舟请求失败")[:1000]
     if "tokens per minute" in safe_message.lower() or "tpm" in safe_message.lower():
         return HTTPException(status_code=429, detail="语言模型 TPM 额度暂时已满，系统将自动等待后重试")
-    # Do not leak Ark's 401 to the frontend SSO layer, which would trigger a
-    # misleading login refresh and duplicate the generation request.
     client_status = 400 if 400 <= response.status_code < 500 else 502
     return HTTPException(status_code=client_status, detail="火山方舟：{}".format(safe_message))
 
@@ -376,13 +337,6 @@ def register_routes(app: FastAPI) -> None:
             media_type="image/png",
             headers={"Cache-Control": "public, max-age=86400"},
         )
-
-    @app.get("/api/v1/user", response_model=UserResponse)
-    async def get_current_user(request: Request):
-        user = request.state.current_user
-        if user is None:
-            raise HTTPException(status_code=403, detail="unauthorized")
-        return user
 
     @app.post("/api/v1/models/test")
     async def test_language_model(payload: ModelTestRequest):
@@ -619,20 +573,14 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_cors_origins(),
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", JWT_HEADER],
+    allow_headers=["Content-Type"],
 )
-setup_permissions(app)
 register_routes(app)
 
 
-# ---------------------------DO NOT EDIT CODE BELOW THIS LINE---------------------------------
-# This is the entry point for the FastAPI application.
 if __name__ == "__main__":
-    port = int(os.environ.get("_BYTEFAAS_RUNTIME_PORT", 8000))
-    config = uvicorn.Config("main:app", port=port, log_level="info", host=None)
-    server = uvicorn.Server(config)
-    server.run()
-# --------------------------------------------------------------------------------------------
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")

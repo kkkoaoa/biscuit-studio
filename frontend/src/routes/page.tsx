@@ -18,9 +18,8 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import biscuitReference from '@/assets/biscuit-reference.png';
-import { fetchWithAuth } from '@/infra/sso/auth';
 
-const API_BASE = (process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 const POLL_INTERVAL = 8000;
 const HISTORY_STORAGE_KEY = 'biscuit-studio-history-v1';
 const HISTORY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -241,7 +240,7 @@ export default function Page() {
   };
 
   const apiRequest = async <T = ArkResponse,>(path: string, body: Record<string, unknown>): Promise<T> => {
-    const response = await fetchWithAuth(`${API_BASE}${path}`, {
+    const response = await fetch(`${API_BASE}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -333,7 +332,7 @@ export default function Page() {
     if (!job.videoUrl || !job.recognizedUtterances?.length) return;
     updateJob(job.localId, { isBurningSubtitles: true, subtitleError: undefined });
     try {
-      const response = await fetchWithAuth(`${API_BASE}/api/v1/subtitles/burn`, {
+      const response = await fetch(`${API_BASE}/api/v1/subtitles/burn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ video_url: job.videoUrl, utterances: job.recognizedUtterances }),

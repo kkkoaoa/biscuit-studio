@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+subtitle_secrets.py
+__pycache__/
+*.py[cod]
+venv/
+.git/
+.gitignore
+Dockerfile
+README.md

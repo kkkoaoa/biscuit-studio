@@ -4,72 +4,78 @@
 
 ![Biscuit Studio character](frontend/src/assets/biscuit-reference.png)
 
-## 在线预览
+## 功能
 
-- Web Demo: https://054495fe0ee4.aime-app.bytedance.net
-
-> 当前预览环境使用 Aime SSO。面向公网的无登录部署版本正在整理中。
-
-## 功能亮点
-
-- **AI 编剧**：根据英语知识点和场景生成标题、口播脚本、分镜、字幕稿与视频提示词。
-- **知识审校**：检查语法、搭配、例外、词源和文化背景，避免为了趣味牺牲准确性。
-- **固定角色**：使用“小饼干”参考图与角色约束，提升多条视频中的形象一致性。
-- **Seedance 视频生成**：调用视频模型生成 30 秒、9:16 的无字教学视频。
-- **自动字幕**：提取音轨，将审校后的字幕稿与真实口播打轴，生成 SRT。
-- **字幕烧录**：通过 FFmpeg 生成中文字幕，并突出显示英文关键词。
-- **批量生产**：支持按“知识点 | 场景”批量创建任务。
-- **本地历史**：浏览器保存最近 7 天、最多 30 条任务记录。
-
-## 工作流程
-
-```text
-输入英语知识点
-      ↓
-语言模型生成脚本、分镜和字幕稿
-      ↓
-Seedance 生成无字幕原片
-      ↓
-提取音轨并进行字幕打轴
-      ↓
-FFmpeg 烧录重点高亮字幕
-      ↓
-下载无字幕原片与带字幕成片
-```
-
-## 项目结构
-
-```text
-biscuit-studio/
-├── frontend/   # React 19 + EdenX 前端
-└── backend/    # FastAPI + FFmpeg 后端
-```
+- 根据英语知识点生成教学脚本、分镜、字幕稿和视频 Prompt
+- 对语法、搭配、例外、词源和英语文化背景进行自检
+- 调用 Seedance 生成固定角色的 9:16 无字幕视频
+- 将审校后的字幕稿与真实口播自动打轴
+- 使用 FFmpeg 烧录中文字幕并高亮英文关键词
+- 支持批量选题、任务队列和失败重试
+- 浏览器本地保存 7 天、最多 30 条历史记录
 
 ## 技术栈
 
-### Frontend
+- Frontend：Vite、React 19、TypeScript、Lucide React
+- Backend：FastAPI、HTTPX、Uvicorn
+- Media：FFmpeg、Noto Sans CJK
+- AI：火山方舟 Responses API、Seedance、豆包语音字幕服务
+- Deployment：Docker Compose、Nginx
 
-- React 19
-- TypeScript
-- EdenX
-- Tailwind CSS
-- Lucide React
-- pnpm
+## 快速启动
 
-### Backend
+普通电脑或云服务器只需安装 Git、Docker 和 Docker Compose。
 
-- Python 3.8+
-- FastAPI
-- Uvicorn
-- HTTPX
-- FFmpeg / imageio-ffmpeg
-- 火山方舟 Responses API
-- Seedance 视频生成 API
-- 豆包语音字幕服务
+```bash
+git clone https://github.com/kkkoaoa/biscuit-studio.git
+cd biscuit-studio
+git checkout aime/1788264454-open-source-release
+cp .env.example .env
+```
 
-## 本地启动
+在 `.env` 中填写字幕服务凭证：
 
-### 1. 启动后端
+```dotenv
+SUBTITLE_APP_ID=
+SUBTITLE_ACCESS_TOKEN=
+CORS_ORIGINS=http://localhost,http://127.0.0.1
+```
+
+启动：
+
+```bash
+docker compose up -d --build
+```
+
+浏览器打开：
+
+```text
+http://localhost
+```
+
+在网页中填写自己的：
+
+- 火山方舟 API Key
+- 语言模型推理接入点 ID
+- Seedance 推理接入点 ID
+
+API Key 只保存在当前浏览器会话，不会写入仓库。
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+查看日志：
+
+```bash
+docker compose logs -f
+```
+
+## 不使用 Docker
+
+### 后端
 
 ```bash
 cd backend
@@ -80,74 +86,85 @@ cp .env.example .env
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-字幕生成需要在后端环境中配置：
+本机需要安装 FFmpeg，并确保存在支持中文的 Noto CJK 字体。
 
-```dotenv
-SUBTITLE_APP_ID=
-SUBTITLE_ACCESS_TOKEN=
-```
-
-也可以在本地创建 `backend/subtitle_secrets.py`，但不要提交该文件：
-
-```python
-SUBTITLE_APP_ID = ""
-SUBTITLE_ACCESS_TOKEN = ""
-```
-
-### 2. 启动前端
+### 前端
 
 ```bash
 cd frontend
+corepack enable
 pnpm install
 cp .env.example .env.local
 pnpm dev
 ```
 
-设置后端地址：
+前端开发环境在 `.env.local` 中配置：
 
 ```dotenv
-REACT_APP_API_BASE_URL=http://localhost:8000
+VITE_API_BASE_URL=http://localhost:8000
 ```
 
-浏览器中还需要填写个人的火山方舟 API Key，以及语言模型、Seedance 推理接入点 ID。API Key 仅保存在当前浏览器会话中。
+访问 `http://localhost:5173`。
 
-## 生产构建
+## 项目结构
 
-```bash
-cd frontend
-pnpm build
+```text
+biscuit-studio/
+├── frontend/
+│   ├── src/                 # React 页面、样式与资源
+│   ├── Dockerfile           # Vite 构建 + Nginx 运行
+│   └── nginx.conf           # 静态站点与 /api 反向代理
+├── backend/
+│   ├── main.py              # FastAPI API
+│   ├── prompts/             # 小饼干英语编剧规范
+│   ├── fonts/               # 中文字幕字体
+│   └── Dockerfile           # Python + FFmpeg 运行环境
+├── docker-compose.yml
+└── .env.example
 ```
 
-构建产物位于 `frontend/dist/`。
+## 主要流程
 
-## 安全说明
+```text
+输入知识点与场景
+      ↓
+大模型生成脚本、分镜、字幕稿
+      ↓
+Seedance 生成无字幕原片
+      ↓
+提取音轨并按审校稿进行字幕打轴
+      ↓
+FFmpeg 烧录中文字幕与英文重点词
+      ↓
+下载无字幕原片和带字幕成片
+```
 
-请勿向仓库提交以下内容：
+## 配置与安全
+
+不要提交以下内容：
 
 - 火山方舟 API Key
 - 字幕服务 Access Token / Secret Key
 - 腾讯云 SecretId / SecretKey
 - `.env`、`subtitle_secrets.py`
 - SSH 私钥和服务器密码
-- 用户生成的视频与本地历史数据
 
-仓库仅保留不含真实凭证的 `.env.example`。
+仓库的 `.gitignore` 和 `.dockerignore` 已排除这些文件。公开仓库只保留空白配置示例。
 
 ## 当前限制
 
-- 当前在线预览仍依赖 Aime SSO 环境。
-- 带字幕视频暂未持久化到对象存储，页面刷新后临时 Blob 地址会失效。
-- 浏览器历史无法跨设备同步。
+- 字幕服务凭证由部署者统一配置在后端。
+- 带字幕视频当前以临时文件返回；刷新后 Blob 地址会失效。
+- 历史记录保存在当前浏览器，无法跨设备同步。
 - 第一版固定生成 30 秒竖屏视频。
 
 ## Roadmap
 
-- [ ] 腾讯云服务器公开部署
-- [ ] COS 保存原片、成片和 SRT，并在 7 天后自动清理
-- [ ] 移除预览环境 SSO，支持公网无登录使用
-- [ ] 后台异步任务和失败重试
-- [ ] 更丰富的字幕模板和知识类型
+- [ ] 接入 COS，对原片、成片和 SRT 保存 7 天
+- [ ] 增加后台异步任务，关闭网页后继续生成
+- [ ] 增加更多字幕模板和知识类型
+- [ ] 增加可选的用户额度与并发限制
 
-## 免责声明
+## 内容说明
 
-本项目生成的英语教学内容应在发布前进行人工复核。第三方模型与云服务的使用须遵守相应平台规则。
+AI 生成的英语教学内容应在正式发布前进行人工复核。第三方模型与云服务的使用须遵守相应平台规则。

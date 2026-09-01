@@ -1,6 +1,0 @@
-allowBuilds:
-  "@biomejs/biome": true
-  "@swc/core": true
-  core-js: true
-  crc64-ecma182.js: true
-  simple-git-hooks: true
