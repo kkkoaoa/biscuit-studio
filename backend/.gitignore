@@ -1,0 +1,5 @@
+__pycache__/
+/venv
+
+# Local subtitle credentials; never commit this file.
+/subtitle_secrets.py

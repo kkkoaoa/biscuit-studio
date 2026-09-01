@@ -1,0 +1,25 @@
+# Dependencies
+**/node_modules/
+**/.pnpm-store/
+**/venv/
+**/__pycache__/
+
+# Build output
+**/dist/
+**/coverage/
+**/release/
+**/output/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+**/subtitle_secrets.py
+*.pem
+*.key
+
+# IDE and system files
+.DS_Store
+.idea/
+.vscode/
+*.log

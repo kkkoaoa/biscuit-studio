@@ -1,0 +1,8 @@
+# 注意：此项目基于 Python 3.8 开发，请确保所有依赖包版本与 Python 3.8 兼容
+# Warning: This project is based on Python 3.8, please ensure all package versions are compatible with Python 3.8
+# Please specify python dependency version for all package in requirements.txt
+uvicorn==0.22.0
+fastapi==0.67.0
+httpx==0.24.1
+setuptools==69.5.1
+imageio-ffmpeg==0.4.9

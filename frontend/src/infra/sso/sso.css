@@ -1,0 +1,46 @@
+.sso-access-denied {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.sso-access-denied-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(-32px);
+}
+
+.sso-access-denied-icon {
+  display: flex;
+  justify-content: center;
+  font-size: 120px;
+}
+
+.sso-access-denied-title {
+  display: flex;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--agent-color-text-1, #2c303c);
+  margin-top: 12px;
+}
+
+.sso-access-denied-copy {
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--agent-color-text-3, #5f5c56);
+  margin-top: 4px;
+  display: flex;
+  justify-content: center;
+}

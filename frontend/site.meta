@@ -1,0 +1,8 @@
+{
+    "app_name": "frontend",
+    "app_description": "小狗英语视频一键批量生产工具",
+    "capabilities": [
+        "access_control"
+    ],
+    "datasources": {}
+}
