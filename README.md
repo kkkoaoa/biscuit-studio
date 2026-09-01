@@ -2,7 +2,7 @@
 
 > 小饼干英语视频工坊：从英语知识点到 30 秒竖屏教学视频的一站式 AI 创作工具。
 
-![Biscuit Studio character](frontend/src/assets/biscuit-reference.png)
+![Biscuit Studio](docs/biscuit-studio-overview.png)
 
 ## 功能
 
