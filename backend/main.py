@@ -6,6 +6,7 @@ import re
 import subprocess
 import tempfile
 import time
+import unicodedata
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
@@ -156,6 +157,216 @@ def subtitle_error(body: Dict[str, Any], fallback: str = "字幕服务请求失�
     return HTTPException(status_code=400, detail="豆包语音：{}".format(safe_message[:1000]))
 
 
+VIDEO_WIDTH_PX = 720
+SUBTITLE_FONT_SIZE_PX = 56
+SUBTITLE_SIDE_MARGIN_PX = 48
+# 720 - 2 * 48 leaves 624px. Reserve 8px for the 3px outline and rasterisation.
+ASS_LINE_WIDTH = float(VIDEO_WIDTH_PX - 2 * SUBTITLE_SIDE_MARGIN_PX - 8)
+MIN_SUBTITLE_SEGMENT_MS = 500
+EDITOR_MARKER_RE = re.compile(r"(?:【\s*(?:重点)?\s*】|\[\s*(?:重点)?\s*\])", re.IGNORECASE)
+SUBTITLE_BRACKET_RE = re.compile(r"[【】\[\]]")
+HIDDEN_DISPLAY_PUNCTUATION = set("，。")
+BREAK_AFTER_PUNCTUATION = set("，。！？；：、,.!?;:）)]}》〉」』”’")
+PHRASE_BOUNDARY_CHARACTERS = set("的了呢吗吧啊呀和与但而在把被让给是有到从向对将就也都又再")
+SUBTITLE_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*|\s+|.", re.DOTALL)
+LATIN_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*")
+
+
+def strip_subtitle_editor_markers(text: str) -> str:
+    """Remove review markup and every line-breaking/bracket delimiter."""
+    cleaned = EDITOR_MARKER_RE.sub("", text)
+    cleaned = cleaned.replace("\\N", " ").replace("\\n", " ")
+    cleaned = SUBTITLE_BRACKET_RE.sub("", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def subtitle_display_text(text: str) -> str:
+    """Return exactly what may be rendered in a final ASS/SRT cue."""
+    cleaned = strip_subtitle_editor_markers(text)
+    cleaned = "".join(character for character in cleaned if character not in HIDDEN_DISPLAY_PUNCTUATION)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def subtitle_character_width(character: str) -> float:
+    """Estimate Noto Sans CJK SC bold glyph advance at the configured 56px size."""
+    if character.isspace():
+        return SUBTITLE_FONT_SIZE_PX * 0.28
+    if unicodedata.east_asian_width(character) in {"W", "F", "A"}:
+        return float(SUBTITLE_FONT_SIZE_PX)
+    if character in "ilI1'’`|.,:;!":
+        return SUBTITLE_FONT_SIZE_PX * 0.28
+    if character in "fjrt()[]{}":
+        return SUBTITLE_FONT_SIZE_PX * 0.38
+    if character in "mwMW@#%&QO0":
+        return SUBTITLE_FONT_SIZE_PX * 0.86
+    if character.isupper():
+        return SUBTITLE_FONT_SIZE_PX * 0.67
+    if character.isdigit():
+        return SUBTITLE_FONT_SIZE_PX * 0.56
+    if character.islower():
+        return SUBTITLE_FONT_SIZE_PX * 0.54
+    return SUBTITLE_FONT_SIZE_PX * 0.58
+
+
+def subtitle_text_width(text: str) -> float:
+    return sum(subtitle_character_width(character) for character in text)
+
+
+def _break_priority(tokens: List[str], index: int) -> int:
+    """Rank a boundary after tokens[index]: punctuation, spaces, phrase, CJK."""
+    token = tokens[index]
+    if token and token[-1] in BREAK_AFTER_PUNCTUATION:
+        return 4
+    if token.isspace():
+        return 3
+    if token and token[-1] in PHRASE_BOUNDARY_CHARACTERS:
+        return 2
+    if token and unicodedata.east_asian_width(token[-1]) in {"W", "F", "A"}:
+        return 1
+    return 0
+
+
+def _is_orphan_fragment(text: str, width: float, max_width: float) -> bool:
+    """Identify endings that look accidental rather than like a readable phrase."""
+    cjk_count = sum(
+        1 for character in text
+        if unicodedata.east_asian_width(character) in {"W", "F", "A"}
+        and character not in BREAK_AFTER_PUNCTUATION
+    )
+    latin_words = LATIN_WORD_RE.findall(text)
+    if cjk_count and not latin_words:
+        return cjk_count <= 3
+    if latin_words and not cjk_count:
+        return len(latin_words) == 1 and width < max_width * 0.38
+    return width < max_width * 0.20
+
+
+def wrap_subtitle_text(text: str, max_width: float = ASS_LINE_WIDTH) -> List[str]:
+    """Globally balance single-line cues while retaining natural source boundaries."""
+    normalized = strip_subtitle_editor_markers(text)
+    rendered_full_text = subtitle_display_text(normalized)
+    if not rendered_full_text:
+        return []
+    # Do not let punctuation or a rough character count split text that really fits.
+    if subtitle_text_width(rendered_full_text) <= max_width:
+        return [rendered_full_text]
+
+    tokens = SUBTITLE_TOKEN_RE.findall(normalized)
+    token_count = len(tokens)
+    edges: Dict[int, List[tuple]] = {index: [] for index in range(token_count)}
+    for start in range(token_count):
+        for end in range(start + 1, token_count + 1):
+            fragment = subtitle_display_text("".join(tokens[start:end]))
+            if not fragment:
+                continue
+            width = subtitle_text_width(fragment)
+            if width > max_width:
+                # A single Latin token remains atomic even in this exceptional case.
+                if end == start + 1 and LATIN_WORD_RE.fullmatch(tokens[start]):
+                    edges[start].append((end, fragment, width, _break_priority(tokens, end - 1)))
+                break
+            edges[start].append((end, fragment, width, _break_priority(tokens, end - 1)))
+
+    # First find the fewest safe cues. This guarantees that text fitting one line
+    # never fragments and avoids the former overly conservative local decisions.
+    infinity = token_count + 1
+    minimum_parts = [infinity] * (token_count + 1)
+    minimum_parts[0] = 0
+    for start in range(token_count):
+        if minimum_parts[start] == infinity:
+            continue
+        for end, _, _, _ in edges.get(start, []):
+            minimum_parts[end] = min(minimum_parts[end], minimum_parts[start] + 1)
+    part_count = minimum_parts[token_count]
+    if part_count == infinity:
+        return [rendered_full_text]
+
+    target_width = subtitle_text_width(rendered_full_text) / part_count
+    states: Dict[tuple, tuple] = {(0, 0): (0.0, [])}
+    boundary_penalty = {4: 0.0, 3: 0.5, 2: 2.0, 1: 5.0, 0: 9.0}
+    for used_parts in range(part_count):
+        for start in range(token_count):
+            state = states.get((used_parts, start))
+            if state is None:
+                continue
+            old_cost, old_fragments = state
+            for end, fragment, width, priority in edges.get(start, []):
+                if used_parts + 1 == part_count and end != token_count:
+                    continue
+                if used_parts + 1 < part_count and end == token_count:
+                    continue
+                imbalance = ((width - target_width) / max_width) ** 2 * 100.0
+                orphan_penalty = 0.0
+                if _is_orphan_fragment(fragment, width, max_width):
+                    orphan_penalty = 1000000.0 if end == token_count else 10000.0
+                semantic_penalty = 0.0 if end == token_count else boundary_penalty[priority]
+                new_cost = old_cost + imbalance + orphan_penalty + semantic_penalty
+                key = (used_parts + 1, end)
+                if key not in states or new_cost < states[key][0]:
+                    states[key] = (new_cost, old_fragments + [fragment])
+
+    final_state = states.get((part_count, token_count))
+    return final_state[1] if final_state else [rendered_full_text]
+
+
+def subtitle_reading_weight(text: str) -> float:
+    """Weight CJK by character and Latin/digit content by readable word size."""
+    weight = 0.0
+    for token in SUBTITLE_TOKEN_RE.findall(text):
+        if token.isspace():
+            continue
+        if LATIN_WORD_RE.fullmatch(token):
+            weight += max(1.0, len(token) * 0.35)
+        elif token in BREAK_AFTER_PUNCTUATION:
+            weight += 0.2
+        else:
+            weight += 1.0
+    return max(weight, 0.1)
+
+
+def split_subtitle_utterance(utterance: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Split one cue and distribute its original interval into contiguous cues."""
+    fragments = wrap_subtitle_text(str(utterance.get("text") or ""))
+    if not fragments:
+        return []
+    start = max(0, int(utterance.get("start_time") or 0))
+    end = max(start, int(utterance.get("end_time") or start))
+    if len(fragments) == 1:
+        return [{**utterance, "text": fragments[0], "start_time": start, "end_time": end}]
+
+    duration = end - start
+    weights = [subtitle_reading_weight(fragment) for fragment in fragments]
+    minimum = MIN_SUBTITLE_SEGMENT_MS if duration >= len(fragments) * MIN_SUBTITLE_SEGMENT_MS else 0
+    distributable = max(0, duration - minimum * len(fragments))
+    total_weight = sum(weights)
+    boundaries = [start]
+    allocated = 0
+    for index, weight in enumerate(weights[:-1]):
+        allocated += minimum + int(round(distributable * weight / total_weight))
+        remaining = len(fragments) - index - 1
+        latest = end - minimum * remaining
+        boundaries.append(min(start + allocated, latest))
+    boundaries.append(end)
+
+    result: List[Dict[str, Any]] = []
+    for index, fragment in enumerate(fragments):
+        result.append({
+            **utterance,
+            "text": fragment,
+            "start_time": boundaries[index],
+            "end_time": boundaries[index + 1],
+        })
+    return result
+
+
+def split_subtitle_utterances(utterances: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalize all cues while preserving order and already-short timings."""
+    result: List[Dict[str, Any]] = []
+    for utterance in utterances:
+        result.extend(split_subtitle_utterance(utterance))
+    return result
+
+
 def clean_expected_subtitle_text(text: str) -> str:
     """Convert the reviewed subtitle draft into plain spoken text for alignment."""
     cleaned_lines: List[str] = []
@@ -164,8 +375,8 @@ def clean_expected_subtitle_text(text: str) -> str:
         if not line:
             continue
         line = re.sub(r"^[-*\d.、\s]+", "", line)
-        line = re.sub(r"【重点】", "", line)
         line = re.sub(r"^【(?:画外男声|采访者|小饼干)】\s*[:：]?\s*", "", line)
+        line = strip_subtitle_editor_markers(line)
         if line:
             cleaned_lines.append(line)
     return "\n".join(cleaned_lines)
@@ -181,13 +392,10 @@ def format_srt_time(milliseconds: int) -> str:
 
 def utterances_to_srt(utterances: List[Dict[str, Any]]) -> str:
     blocks: List[str] = []
-    for index, utterance in enumerate(utterances, start=1):
-        text = str(utterance.get("text") or "").strip()
-        if not text:
-            continue
-        start = format_srt_time(utterance.get("start_time") or 0)
-        end = format_srt_time(utterance.get("end_time") or 0)
-        blocks.append("{}\n{} --> {}\n{}".format(index, start, end, text))
+    for index, utterance in enumerate(split_subtitle_utterances(utterances), start=1):
+        start = format_srt_time(utterance["start_time"])
+        end = format_srt_time(utterance["end_time"])
+        blocks.append("{}\n{} --> {}\n{}".format(index, start, end, utterance["text"]))
     return "\n\n".join(blocks)
 
 
@@ -200,7 +408,7 @@ def format_ass_time(milliseconds: int) -> str:
 
 
 def highlight_english_for_ass(text: str) -> str:
-    safe = text.replace("{", "（").replace("}", "）").replace("\n", " ")
+    safe = text.replace("{", "（").replace("}", "）")
     pattern = r"[A-Za-z][A-Za-z0-9'’.-]*(?:\s+[A-Za-z][A-Za-z0-9'’.-]*)*"
     return re.sub(pattern, lambda match: r"{\c&H00A5FF&}" + match.group(0) + r"{\c&HFFFFFF&}", safe)
 
@@ -221,13 +429,11 @@ Style: Default,Noto Sans CJK SC,56,&H00FFFFFF,&H0000A5FF,&H00151515,&H90000000,-
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines: List[str] = []
-    for utterance in utterances:
-        text = str(utterance.get("text") or "").strip()
-        if not text:
-            continue
-        start = format_ass_time(utterance.get("start_time") or 0)
-        end = format_ass_time(utterance.get("end_time") or 0)
-        lines.append("Dialogue: 0,{},{},Default,,0,0,0,,{}".format(start, end, highlight_english_for_ass(text)))
+    for utterance in split_subtitle_utterances(utterances):
+        start = format_ass_time(utterance["start_time"])
+        end = format_ass_time(utterance["end_time"])
+        ass_text = highlight_english_for_ass(utterance["text"])
+        lines.append("Dialogue: 0,{},{},Default,,0,0,0,,{}".format(start, end, ass_text))
     return header + "\n".join(lines) + "\n"
 
 

@@ -63,7 +63,8 @@ button { cursor: pointer; }
   padding: 58px 0 54px;
 }
 .eyebrow { display: flex; align-items: center; gap: 7px; margin: 0 0 14px; color: var(--yellow-deep); font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
-.hero h1 { margin: 0; font-family: Georgia, "Songti SC", serif; font-size: clamp(44px, 5vw, 72px); line-height: 1.03; letter-spacing: -0.05em; font-weight: 500; }
+.hero h1 { margin: 0; max-width: 100%; font-family: Georgia, "Songti SC", serif; font-size: clamp(36px, 4.7vw, 64px); line-height: 1.03; letter-spacing: -0.05em; font-weight: 500; }
+.hero h1 > span { display: block; max-width: 100%; white-space: nowrap; }
 .hero h1 em { color: var(--navy); font-style: normal; position: relative; }
 .hero h1 em::after { content: ""; position: absolute; left: 2%; right: -1%; bottom: -9px; height: 9px; border-radius: 50%; background: var(--yellow); transform: rotate(-1deg); opacity: 0.75; z-index: -1; }
 .hero-description { max-width: 580px; margin: 26px 0; color: var(--muted); font-size: 16px; line-height: 1.8; }
@@ -165,6 +166,28 @@ details { margin: 16px 0; }
 summary { color: var(--navy); cursor: pointer; font-size: 11px; font-weight: 700; }
 pre, .prompt-preview { white-space: pre-wrap; font-family: inherit; color: var(--muted); font-size: 10px; line-height: 1.7; }
 .prompt-preview { max-height: 100px; overflow: auto; padding: 10px; background: var(--paper); border-radius: 10px; }
+.job-content { margin: 16px 0; }
+.job-content-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.content-toggle, .edit-content-button, .save-content-button, .cancel-content-button { display: inline-flex; align-items: center; gap: 5px; border-radius: 9px; font-weight: 700; }
+.content-toggle { min-width: 0; padding: 5px 0; color: var(--navy); background: transparent; border: 0; font-size: 11px; text-align: left; }
+.content-toggle svg { flex: 0 0 auto; transform: rotate(-90deg); transition: transform 180ms ease; }
+.content-toggle svg.is-expanded { transform: rotate(0); }
+.edit-content-button { flex: 0 0 auto; padding: 6px 9px; color: var(--navy); background: rgba(169,216,192,0.24); border: 1px solid rgba(25,51,78,0.1); font-size: 10px; }
+.edit-content-button:hover { background: rgba(169,216,192,0.42); }
+.content-locked { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 9px; }
+.job-content-body { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.job-content-body > strong { display: block; margin-top: 12px; color: var(--ink); font-size: 11px; }
+.job-content-body > strong:first-child { margin-top: 0; }
+.job-content-body label { display: grid; gap: 6px; margin-top: 12px; color: var(--ink); font-size: 11px; font-weight: 700; }
+.job-content-body label:first-child { margin-top: 0; }
+.job-content-body textarea { min-height: 120px; padding: 11px; border-radius: 11px; font-size: 11px; line-height: 1.65; font-weight: 400; }
+.job-content-body textarea.prompt-editor { min-height: 190px; }
+.editor-actions { display: flex; gap: 8px; margin-top: 12px; }
+.save-content-button, .cancel-content-button { justify-content: center; min-height: 34px; padding: 8px 12px; font-size: 11px; }
+.save-content-button { color: var(--white); background: var(--navy); border: 1px solid var(--navy); }
+.cancel-content-button { color: var(--muted); background: transparent; border: 1px solid var(--line); }
+.save-content-button:hover { box-shadow: 0 6px 16px rgba(25,51,78,0.16); }
+.cancel-content-button:hover { color: var(--navy); background: var(--cream); }
 .error-message { padding: 9px; color: #9d4032; background: rgba(217,131,114,0.13); border-radius: 10px; font-size: 10px; line-height: 1.5; }
 .video-result video { width: 100%; max-height: 320px; border-radius: 14px; background: #211f1b; }
 .result-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
@@ -191,7 +214,7 @@ footer { min-height: 82px; display: flex; align-items: center; justify-content: 
   .topbar, .hero, .workspace-grid, .results-section { width: min(100% - 24px, 1180px); }
   .topbar-badge { display: none; }
   .hero { padding-top: 38px; }
-  .hero h1 { font-size: 42px; }
+  .hero h1 { font-size: clamp(22px, 8.5vw, 42px); }
   .hero-description { font-size: 14px; }
   .flow-chips { gap: 5px; flex-wrap: wrap; justify-content: center; }
   .flow-chips svg { display: none; }

@@ -16,8 +16,9 @@ import {
   Trash2,
   WandSparkles,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import biscuitReference from '@/assets/biscuit-reference.png';
+import { JobContentEditor } from '@/components/JobContentEditor';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 const POLL_INTERVAL = 8000;
@@ -156,7 +157,17 @@ export default function Page() {
   const [prepareError, setPrepareError] = useState('');
   const [jobs, setJobs] = useState<VideoJob[]>(loadHistory);
   const [isBatchRunning, setIsBatchRunning] = useState(false);
+  const [editingJobIds, setEditingJobIds] = useState<Set<string>>(() => new Set());
   const stopRef = useRef(false);
+
+  const handleEditingChange = useCallback((localId: string, isEditing: boolean) => {
+    setEditingJobIds((current) => {
+      const next = new Set(current);
+      if (isEditing) next.add(localId);
+      else next.delete(localId);
+      return next;
+    });
+  }, []);
 
   const referenceUrl = 'builtin://biscuit';
   const stats = useMemo(() => ({
@@ -466,7 +477,7 @@ export default function Page() {
       <section className="hero">
         <div className="hero-copy">
           <p className="eyebrow"><Sparkles size={15} /> 一键批量生产</p>
-          <h1>把英语知识点，变成<br /><em>会说话的小狗视频。</em></h1>
+          <h1><span>把英语知识点，变成</span><span><em>会说话的小狗视频。</em></span></h1>
           <p className="hero-description">输入选题与场景，由语言模型生成脚本、分镜和字幕稿，再批量提交 Seedance 2.5。</p>
           <div className="flow-chips"><span>01 输入选题</span><ChevronRight size={16} /><span>02 自动成稿</span><ChevronRight size={16} /><span>03 批量出片</span></div>
         </div>
@@ -518,7 +529,8 @@ export default function Page() {
         <section className="queue-panel panel">
           <div className="panel-heading"><div><span className="step-number">03</span><h2>生产队列</h2></div><span className="count-badge">{stats.total} 条</span></div>
           <div className="stat-strip"><div><strong>{stats.completed}</strong><span>已完成</span></div><div><strong>{stats.active}</strong><span>进行中</span></div><div><strong>{stats.failed}</strong><span>失败</span></div></div>
-          <button className="primary-action" type="button" disabled={!apiKey.trim() || !model.startsWith('ep-') || !jobs.length || isBatchRunning || isPreparing} onClick={runBatch}>{isBatchRunning ? <LoaderCircle className="spin" size={19} /> : <Play size={19} fill="currentColor" />}{isBatchRunning ? '正在处理任务…' : stats.active > 0 ? '继续查询已有任务' : '一键生成全部视频'}</button>
+          <button className="primary-action" type="button" disabled={!apiKey.trim() || !model.startsWith('ep-') || !jobs.length || isBatchRunning || isPreparing || editingJobIds.size > 0} onClick={runBatch}>{isBatchRunning ? <LoaderCircle className="spin" size={19} /> : <Play size={19} fill="currentColor" />}{isBatchRunning ? '正在处理任务…' : stats.active > 0 ? '继续查询已有任务' : '一键生成全部视频'}</button>
+          {editingJobIds.size > 0 && <p className="key-warning"><CircleAlert size={15} /> 请先保存或取消正在编辑的任务内容，再生成视频</p>}
           {isBatchRunning && <button className="stop-action" type="button" onClick={stopBatch}>完成当前任务后停止</button>}
           {!apiKey.trim() && <p className="key-warning"><CircleAlert size={15} /> 填写 API Key 后即可开始生成</p>}
           {apiKey.trim() && !languageModel.startsWith('ep-') && <p className="key-warning"><CircleAlert size={15} /> 请填写语言大模型推理接入点 ID</p>}
@@ -536,7 +548,14 @@ export default function Page() {
             <article className={`job-card status-${job.status}`} key={job.localId}>
               <div className="job-card-top"><span className="job-index">{String(index + 1).padStart(2, '0')}</span><span className="status-pill">{['submitting', 'queued', 'running'].includes(job.status) && <LoaderCircle className="spin" size={13} />}{job.status === 'succeeded' && <CheckCircle2 size={13} />}{job.status === 'failed' && <CircleAlert size={13} />}{statusLabel(job.status)}</span></div>
               <h3>{job.title}</h3><p className="scene-tag">📍 {job.scene}</p>
-              <details><summary>查看脚本、分镜与字幕稿</summary><strong>口播脚本</strong><pre>{job.script}</pre>{job.storyboard && <><strong>分镜</strong><pre>{job.storyboard}</pre></>}{job.subtitles && <><strong>后期字幕稿</strong><pre>{job.subtitles}</pre></>}<strong>Seedance 无字画面提示词</strong><p className="prompt-preview">{job.prompt}</p></details>
+              <JobContentEditor
+                content={job}
+                jobId={job.localId}
+                canEdit={job.status === 'draft' || job.status === 'failed'}
+                defaultExpanded={job.status === 'draft' || job.status === 'failed'}
+                onEditingChange={handleEditingChange}
+                onSave={(content) => updateJob(job.localId, content)}
+              />
               {job.taskId && <p className="task-id">Task · {job.taskId}</p>}
               {job.error && <p className="error-message">{job.error}</p>}
               {!job.videoUrl && job.taskId && job.status === 'succeeded' && <button className="recovery-action" type="button" disabled={job.isRecoveringVideo} onClick={() => recoverVideoAndGenerateSubtitles(job)}>{job.isRecoveringVideo ? <LoaderCircle className="spin" size={18} /> : <WandSparkles size={18} />}{job.isRecoveringVideo ? '正在找回原片…' : '原片已失效 · 点击生成带字幕视频'}</button>}
