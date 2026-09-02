@@ -25,7 +25,7 @@ const POLL_INTERVAL = 8000;
 const HISTORY_STORAGE_KEY = 'biscuit-studio-history-v1';
 const HISTORY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const HISTORY_LIMIT = 30;
-const API_KEY_SESSION_KEY = 'biscuit-studio-api-key';
+const API_KEY_STORAGE_KEY = 'biscuit-studio-api-key';
 
 const PRESETS = [
   '在床上用 in bed 还是 on the bed？ | 温暖卧室',
@@ -111,6 +111,14 @@ function loadHistory(): VideoJob[] {
   }
 }
 
+function loadApiKey(): string {
+  if (typeof window === 'undefined') return '';
+  const persistedKey = localStorage.getItem(API_KEY_STORAGE_KEY) || '';
+  const sessionKey = sessionStorage.getItem(API_KEY_STORAGE_KEY) || '';
+  if (!persistedKey && sessionKey) localStorage.setItem(API_KEY_STORAGE_KEY, sessionKey);
+  return persistedKey || sessionKey;
+}
+
 function parseLine(line: string, index: number, duration: number): VideoJob | null {
   const clean = line.trim().replace(/^[-*\d.、\s]+/, '');
   if (!clean) return null;
@@ -144,7 +152,7 @@ function statusLabel(status: QueueStatus) {
 }
 
 export default function Page() {
-  const [apiKey, setApiKey] = useState(() => typeof window === 'undefined' ? '' : sessionStorage.getItem(API_KEY_SESSION_KEY) || '');
+  const [apiKey, setApiKey] = useState(loadApiKey);
   const [showKey, setShowKey] = useState(false);
   const [model, setModel] = useState('ep-20260829130303-ddm7l');
   const [languageModel, setLanguageModel] = useState('ep-20260829134526-kk9fn');
@@ -184,8 +192,9 @@ export default function Page() {
   }, [jobs]);
 
   useEffect(() => {
-    if (apiKey) sessionStorage.setItem(API_KEY_SESSION_KEY, apiKey);
-    else sessionStorage.removeItem(API_KEY_SESSION_KEY);
+    if (apiKey) localStorage.setItem(API_KEY_STORAGE_KEY, apiKey);
+    else localStorage.removeItem(API_KEY_STORAGE_KEY);
+    sessionStorage.removeItem(API_KEY_STORAGE_KEY);
   }, [apiKey]);
 
   const prepareJobs = async () => {
@@ -523,6 +532,7 @@ export default function Page() {
             {PRESETS.slice(3).map((preset) => <button key={preset} type="button" onClick={() => setTopicText((value) => `${value}${value ? '\n' : ''}${preset}`)}><Plus size={13} />{preset.split('|')[0].slice(0, 8)}…</button>)}
           </div>
           <button className="secondary-action" type="button" disabled={!apiKey.trim() || !languageModel.startsWith('ep-') || !topicText.trim() || isPreparing} onClick={prepareJobs}>{isPreparing ? <LoaderCircle className="spin" size={18} /> : <WandSparkles size={18} />} {isPreparing ? '语言模型正在备课…' : '生成脚本、分镜与字幕稿'}</button>
+          {!apiKey.trim() && <p className="key-warning"><CircleAlert size={15} /> 填写 API Key 后即可开始生成</p>}
           {prepareError && <p className="error-message">{prepareError}</p>}
         </section>
 
