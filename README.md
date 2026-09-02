@@ -1,6 +1,7 @@
 # Biscuit Studio 🐶
 
 > 小饼干英语视频工坊：从英语知识点到 30 秒竖屏教学视频的一站式 AI 创作工具。
+> 已上线，网址可见：http://1.13.175.246/
 
 ![Biscuit Studio](docs/biscuit-studio-overview.png)
 
