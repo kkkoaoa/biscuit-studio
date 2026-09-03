@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import random
 import re
 import subprocess
 import tempfile
@@ -91,6 +92,31 @@ class GenerateScriptRequest(BaseModel):
     topic: str = Field(..., min_length=2, max_length=500)
     scene: str = Field("温暖明亮的生活场景", min_length=2, max_length=200)
     duration: int = Field(30, ge=30, le=30)
+    content_mode: str = Field("knowledge", regex=r"^(knowledge|dialogue)$")
+
+
+DIALOGUE_PARTNERS = (
+    {
+        "name": "小猫",
+        "appearance": "一只小巧的银灰色短毛猫，翠绿色圆眼睛，白色下巴，戴细窄的珊瑚橙色项圈，不穿衣服",
+        "voice": "轻柔机灵的年轻女童声，音高略高，语尾轻快",
+    },
+    {
+        "name": "小水獭",
+        "appearance": "一只圆脸的深棕色小水獭，浅米色口鼻和胸口，黑色豆豆眼，戴湖蓝色小领巾",
+        "voice": "温暖活泼的少年童声，音色圆润，语速自然",
+    },
+    {
+        "name": "小仓鼠",
+        "appearance": "一只掌心大小的金棕色小仓鼠，奶白色肚皮，圆耳朵和鼓鼓脸颊，背迷你薄荷绿斜挎包",
+        "voice": "清脆略快的幼童声，音量柔和，紧张时有短暂停顿",
+    },
+    {
+        "name": "小鸟",
+        "appearance": "一只小巧的天蓝色圆滚滚小鸟，白色脸颊，淡黄色短喙，右脚戴一枚红色细脚环",
+        "voice": "清亮有节奏的中性童声，音高明快但不尖锐",
+    },
+)
 
 
 class ScriptResult(BaseModel):
@@ -483,15 +509,29 @@ def parse_json_object(text: str) -> Dict[str, Any]:
             raise HTTPException(status_code=502, detail="语言模型返回的脚本格式不正确") from error
 
 
-@lru_cache(maxsize=1)
-def get_script_prompt_template() -> str:
-    prompt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", "biscuit_script_prompt.txt")
+@lru_cache(maxsize=2)
+def get_script_prompt_template(content_mode: str = "knowledge") -> str:
+    filename = "biscuit_dialogue_prompt.txt" if content_mode == "dialogue" else "biscuit_script_prompt.txt"
+    prompt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", filename)
     with open(prompt_path, "r", encoding="utf-8") as prompt_file:
         return prompt_file.read()
 
 
+def select_dialogue_partner() -> Dict[str, str]:
+    return random.choice(DIALOGUE_PARTNERS)
+
+
 def build_script_instruction(payload: GenerateScriptRequest) -> str:
-    return get_script_prompt_template().format(topic=payload.topic, scene=payload.scene)
+    if payload.content_mode == "dialogue":
+        partner = select_dialogue_partner()
+        return get_script_prompt_template("dialogue").format(
+            topic=payload.topic,
+            scene=payload.scene,
+            partner_name=partner["name"],
+            partner_appearance=partner["appearance"],
+            partner_voice=partner["voice"],
+        )
+    return get_script_prompt_template("knowledge").format(topic=payload.topic, scene=payload.scene)
 
 
 @lru_cache(maxsize=1)

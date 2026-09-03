@@ -118,6 +118,16 @@ input, select { height: 44px; padding: 0 12px; border-radius: 12px; font-size: 1
 .locked-card div { display: grid; gap: 3px; }
 .locked-card strong { font-size: 12px; }
 .locked-card span { color: var(--muted); font-size: 10px; }
+.mode-switch { margin: -8px 0 8px; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; border: 0; }
+.mode-switch legend { grid-column: 1 / -1; margin-bottom: 7px; color: #5f5953; font-size: 12px; font-weight: 700; }
+.mode-switch label { min-width: 0; padding: 10px 11px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 13px; background: #fffdf8; cursor: pointer; transition: border 180ms, background 180ms, box-shadow 180ms; }
+.mode-switch label.is-active { border-color: rgba(217, 151, 12, 0.7); background: rgba(246, 191, 67, 0.14); box-shadow: 0 0 0 3px rgba(246, 191, 67, 0.1); }
+.mode-switch input { width: 15px; height: 15px; padding: 0; accent-color: var(--yellow-deep); flex: 0 0 auto; }
+.mode-switch span { min-width: 0; display: grid; gap: 2px; }
+.mode-switch strong { font-size: 11px; }
+.mode-switch small { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.mode-switch:disabled { opacity: 0.65; }
+.mode-note { margin: 0 0 17px; min-height: 30px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .hint { margin: -10px 0 10px; color: var(--muted); font-size: 12px; }
 textarea { min-height: 210px; padding: 14px; resize: vertical; border-radius: 16px; font-size: 13px; line-height: 1.85; }
 .preset-row { margin: 12px 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

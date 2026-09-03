@@ -16,7 +16,7 @@ import {
   Trash2,
   WandSparkles,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import biscuitReference from '@/assets/biscuit-reference.png';
 import { JobContentEditor } from '@/components/JobContentEditor';
 
@@ -26,6 +26,8 @@ const HISTORY_STORAGE_KEY = 'biscuit-studio-history-v1';
 const HISTORY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const HISTORY_LIMIT = 30;
 const API_KEY_STORAGE_KEY = 'biscuit-studio-api-key';
+const CONTENT_MODE_STORAGE_KEY = 'biscuit-studio-content-mode-v1';
+type ContentMode = 'knowledge' | 'dialogue';
 
 const PRESETS = [
   '在床上用 in bed 还是 on the bed？ | 温暖卧室',
@@ -40,12 +42,15 @@ const CHARACTER_LOCK = `固定角色“小饼干”保留参考图中的核心�
 
 const STYLE_LOCK = `竖屏 9:16，真实摄影，稳定中近景，自然光，浅景深，毛发细节清晰。小饼干中文语速舒缓自然，英文发音清晰，句间停顿约 0.5 秒，嘴型与台词自然同步；减少台词密度，不抢词、不赶语速。小饼干整体活泼可爱，回答时经常露出笑脸，偶尔轻笑或咯咯笑，开心时自然歪头、灵动抖耳、摇尾巴或抬起前爪，但动作不过度。采访者声音与小狗童声明显区分，不能使用同一音色。画面中不要生成任何字幕、单词、标题、Logo、水印或其他文字，也不要出现额外动物；中文字幕将在视频生成后通过语音识别和后期工具准确添加。`;
 
+const DIALOGUE_VIDEO_LOCK = `小饼干仍以参考图为绝对主角，严格保持奶油色柯基幼犬、黑亮圆眼、鼻梁中央白色菱形毛、海军蓝与奶油白细格纹学院风小马甲、白色小领口和黄色骨头徽章，不得改变外观。全片只允许小饼干和后端指定的唯一伙伴两只动物，不得出现采访者或第三只动物。伙伴的物种、外观、配饰和声音必须沿用脚本中的固定设定。每句只有被标注的当前说话角色动嘴，另一角色必须闭嘴，仅做表情或动作反应；禁止串声、抢词和双嘴同步。竖屏 9:16，真实摄影，自然光，浅景深，毛发细节清晰。画面中不要生成任何文字、字幕、单词、标题、Logo 或水印。`;
+
 type QueueStatus = 'draft' | 'submitting' | 'queued' | 'running' | 'succeeded' | 'failed';
 
 type VideoJob = {
   localId: string;
   topic: string;
   scene: string;
+  contentMode?: ContentMode;
   title: string;
   script: string;
   storyboard?: string;
@@ -119,7 +124,12 @@ function loadApiKey(): string {
   return persistedKey || sessionKey;
 }
 
-function parseLine(line: string, index: number, duration: number): VideoJob | null {
+function loadContentMode(): ContentMode {
+  if (typeof window === 'undefined') return 'knowledge';
+  return localStorage.getItem(CONTENT_MODE_STORAGE_KEY) === 'dialogue' ? 'dialogue' : 'knowledge';
+}
+
+function parseLine(line: string, index: number, duration: number, contentMode: ContentMode): VideoJob | null {
   const clean = line.trim().replace(/^[-*\d.、\s]+/, '');
   if (!clean) return null;
   const [topicPart, scenePart] = clean.split('|').map((item) => item.trim());
@@ -132,6 +142,7 @@ function parseLine(line: string, index: number, duration: number): VideoJob | nu
     localId: `${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
     topic,
     scene,
+    contentMode,
     title,
     script,
     prompt,
@@ -160,6 +171,7 @@ export default function Page() {
   const [modelTestResult, setModelTestResult] = useState('');
   const [resolution, setResolution] = useState('720p');
   const duration = 30;
+  const [contentMode, setContentMode] = useState<ContentMode>(loadContentMode);
   const [topicText, setTopicText] = useState('');
   const [isPreparing, setIsPreparing] = useState(false);
   const [prepareError, setPrepareError] = useState('');
@@ -197,9 +209,13 @@ export default function Page() {
     sessionStorage.removeItem(API_KEY_STORAGE_KEY);
   }, [apiKey]);
 
+  useEffect(() => {
+    localStorage.setItem(CONTENT_MODE_STORAGE_KEY, contentMode);
+  }, [contentMode]);
+
   const prepareJobs = async () => {
     if (!apiKey.trim() || !languageModel.startsWith('ep-')) return;
-    const drafts = topicText.split('\n').map((line, index) => parseLine(line, index, duration)).filter(Boolean).slice(0, HISTORY_LIMIT) as VideoJob[];
+    const drafts = topicText.split('\n').map((line, index) => parseLine(line, index, duration, contentMode)).filter(Boolean).slice(0, HISTORY_LIMIT) as VideoJob[];
     if (!drafts.length) return;
     setPrepareError('');
     setIsPreparing(true);
@@ -216,6 +232,7 @@ export default function Page() {
               topic: draft.topic,
               scene: draft.scene,
               duration,
+              content_mode: contentMode,
             });
             break;
           } catch (error) {
@@ -250,7 +267,9 @@ export default function Page() {
           script: generated.script,
           storyboard: generated.storyboard,
           subtitles: generated.subtitles,
-          prompt: `${generated.prompt}\n\n${CHARACTER_LOCK}\n${STYLE_LOCK}`,
+          prompt: contentMode === 'dialogue'
+            ? `${generated.prompt}\n\n${DIALOGUE_VIDEO_LOCK}`
+            : `${generated.prompt}\n\n${CHARACTER_LOCK}\n${STYLE_LOCK}`,
         });
         setJobs([...generatedJobs, ...previousJobs].slice(0, HISTORY_LIMIT));
       }
@@ -492,8 +511,8 @@ export default function Page() {
       <section className="hero">
         <div className="hero-copy">
           <p className="eyebrow"><Sparkles size={15} /> 一键批量生产</p>
-          <h1><span>把英语知识点，变成</span><span><em>会说话的小狗视频。</em></span></h1>
-          <p className="hero-description">输入选题与场景，由语言模型生成脚本、分镜和字幕稿，再批量提交 Seedance 2.5。</p>
+          <h1><span>把英语知识点与口语，变成</span><span><em>会说话的小狗视频。</em></span></h1>
+          <p className="hero-description">选择知识讲解或口语情景对话，由语言模型生成脚本、分镜和字幕稿，再批量提交 Seedance 2.5。</p>
           <div className="flow-chips"><span>01 输入选题</span><ChevronRight size={16} /><span>02 自动成稿</span><ChevronRight size={16} /><span>03 批量出片</span></div>
         </div>
         <div className="hero-visual">
@@ -505,7 +524,7 @@ export default function Page() {
 
       <section className="workspace-grid">
         <aside className="setup-panel panel">
-          <div className="panel-heading"><div><span className="step-number">01</span><h2>生成设置</h2></div><small>API Key 仅随请求发送，不会保存</small></div>
+          <div className="panel-heading"><div><span className="step-number">01</span><h2>生成设置</h2></div><small>API Key 保存在当前浏览器并仅随请求发送</small></div>
           <label className="field-label" htmlFor="api-key"><KeyRound size={15} /> 火山方舟 API Key</label>
           <div className="key-field">
             <input id="api-key" type={showKey ? 'text' : 'password'} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="输入 ARK_API_KEY" autoComplete="off" />
@@ -518,7 +537,7 @@ export default function Page() {
           <input id="language-model" type="text" value={languageModel} onChange={(event) => { setLanguageModel(event.target.value.trim()); setModelTestResult(''); }} placeholder="例如 ep-xxxxxxxx" autoComplete="off" />
           <div className="model-test-row">
             <button type="button" disabled={!apiKey.trim() || !languageModel.startsWith('ep-') || isTestingModel} onClick={testLanguageModel}>{isTestingModel ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />} {isTestingModel ? '正在测试…' : '仅测试接入点是否可用'}</button>
-            {modelTestResult && <span className={modelTestResult.startsWith('调用成功') ? 'test-success' : 'test-error'}>{modelTestResult}</span>}
+            {modelTestResult ? <span className={modelTestResult.startsWith('调用成功') ? 'test-success' : 'test-error'}>{modelTestResult}</span> : null}
           </div>
           <p className="model-test-note">这里只做最小连通性诊断，不会替代正式脚本；下方“生成脚本、分镜与字幕稿”会使用每条选题和小狗趣味教学 Prompt。</p>
           <p className="endpoint-tip"><CheckCircle2 size={13} /> 用于动态生成脚本、分镜和后期字幕稿。</p>
@@ -531,6 +550,18 @@ export default function Page() {
 
         <section className="input-panel panel">
           <div className="panel-heading"><div><span className="step-number">02</span><h2>批量选题</h2></div><button className="text-button" type="button" onClick={() => setTopicText('')}><Trash2 size={15} /> 清空</button></div>
+          <fieldset className="mode-switch" disabled={isPreparing}>
+            <legend>内容模式</legend>
+            <label className={contentMode === 'knowledge' ? 'is-active' : ''}>
+              <input type="radio" name="content-mode" value="knowledge" checked={contentMode === 'knowledge'} onChange={() => setContentMode('knowledge')} />
+              <span><strong>知识讲解</strong><small>70% 知识 · 采访互动</small></span>
+            </label>
+            <label className={contentMode === 'dialogue' ? 'is-active' : ''}>
+              <input type="radio" name="content-mode" value="dialogue" checked={contentMode === 'dialogue'} onChange={() => setContentMode('dialogue')} />
+              <span><strong>口语情景对话</strong><small>双角色 · 随机伙伴</small></span>
+            </label>
+          </fieldset>
+          <p className="mode-note">{contentMode === 'knowledge' ? '小饼干讲透规则、例句与易错边界。' : '小饼干将和一位随机小动物伙伴完成真实口语对话。'}</p>
           <p className="hint">每行一个选题，可用“选题 | 场景”指定画面。</p>
           <textarea value={topicText} onChange={(event) => setTopicText(event.target.value)} placeholder={'例如：\n在床上用 in bed 还是 on the bed？ | 温暖卧室\n在公交车上为什么用 on the bus？ | 城市公交车\n三伏天为什么叫 dog days？ | 夏日公园'} />
           <div className="preset-row">
@@ -538,31 +569,31 @@ export default function Page() {
             {PRESETS.slice(3).map((preset) => <button key={preset} type="button" onClick={() => setTopicText((value) => `${value}${value ? '\n' : ''}${preset}`)}><Plus size={13} />{preset.split('|')[0].slice(0, 8)}…</button>)}
           </div>
           <button className="secondary-action" type="button" disabled={!apiKey.trim() || !languageModel.startsWith('ep-') || !topicText.trim() || isPreparing} onClick={prepareJobs}>{isPreparing ? <LoaderCircle className="spin" size={18} /> : <WandSparkles size={18} />} {isPreparing ? '语言模型正在备课…' : '生成脚本、分镜与字幕稿'}</button>
-          {!apiKey.trim() && <p className="key-warning"><CircleAlert size={15} /> 填写 API Key 后即可开始生成</p>}
-          {prepareError && <p className="error-message">{prepareError}</p>}
+          {!apiKey.trim() ? <p className="key-warning"><CircleAlert size={15} /> 填写 API Key 后即可开始生成</p> : null}
+          {prepareError ? <p className="error-message">{prepareError}</p> : null}
         </section>
 
         <section className="queue-panel panel">
           <div className="panel-heading"><div><span className="step-number">03</span><h2>生产队列</h2></div><span className="count-badge">{stats.total} 条</span></div>
           <div className="stat-strip"><div><strong>{stats.completed}</strong><span>已完成</span></div><div><strong>{stats.active}</strong><span>进行中</span></div><div><strong>{stats.failed}</strong><span>失败</span></div></div>
           <button className="primary-action" type="button" disabled={!apiKey.trim() || !model.startsWith('ep-') || !jobs.length || isBatchRunning || isPreparing || editingJobIds.size > 0} onClick={runBatch}>{isBatchRunning ? <LoaderCircle className="spin" size={19} /> : <Play size={19} fill="currentColor" />}{isBatchRunning ? '正在处理任务…' : stats.active > 0 ? '继续查询已有任务' : '一键生成全部视频'}</button>
-          {editingJobIds.size > 0 && <p className="key-warning"><CircleAlert size={15} /> 请先保存或取消正在编辑的任务内容，再生成视频</p>}
-          {isBatchRunning && <button className="stop-action" type="button" onClick={stopBatch}>完成当前任务后停止</button>}
-          {!apiKey.trim() && <p className="key-warning"><CircleAlert size={15} /> 填写 API Key 后即可开始生成</p>}
-          {apiKey.trim() && !languageModel.startsWith('ep-') && <p className="key-warning"><CircleAlert size={15} /> 请填写语言大模型推理接入点 ID</p>}
-          {apiKey.trim() && !model.startsWith('ep-') && <p className="key-warning"><CircleAlert size={15} /> 请填写 Seedance 推理接入点 ID</p>}
-          {apiKey.trim() && languageModel.startsWith('ep-') && model.startsWith('ep-') && !jobs.length && <p className="key-warning"><CircleAlert size={15} /> 请先生成并确认脚本预览</p>}
+          {editingJobIds.size > 0 ? <p className="key-warning"><CircleAlert size={15} /> 请先保存或取消正在编辑的任务内容，再生成视频</p> : null}
+          {isBatchRunning ? <button className="stop-action" type="button" onClick={stopBatch}>完成当前任务后停止</button> : null}
+          {!apiKey.trim() ? <p className="key-warning"><CircleAlert size={15} /> 填写 API Key 后即可开始生成</p> : null}
+          {apiKey.trim() && !languageModel.startsWith('ep-') ? <p className="key-warning"><CircleAlert size={15} /> 请填写语言大模型推理接入点 ID</p> : null}
+          {apiKey.trim() && !model.startsWith('ep-') ? <p className="key-warning"><CircleAlert size={15} /> 请填写 Seedance 推理接入点 ID</p> : null}
+          {apiKey.trim() && languageModel.startsWith('ep-') && model.startsWith('ep-') && !jobs.length ? <p className="key-warning"><CircleAlert size={15} /> 请先生成并确认脚本预览</p> : null}
         </section>
       </section>
 
       <section className="results-section">
-        <div className="results-heading"><div><p className="eyebrow"><Clapperboard size={15} /> Production queue</p><h2>脚本与成片</h2></div>{jobs.length > 0 && <button className="text-button" type="button" onClick={prepareJobs}><RotateCcw size={15} /> 重新生成文案</button>}</div>
+        <div className="results-heading"><div><p className="eyebrow"><Clapperboard size={15} /> Production queue</p><h2>脚本与成片</h2></div>{jobs.length > 0 ? <button className="text-button" type="button" onClick={prepareJobs}><RotateCcw size={15} /> 重新生成文案</button> : null}</div>
         {jobs.length === 0 ? (
           <div className="empty-state"><span><WandSparkles size={26} /></span><h3>先让小饼干备课吧</h3><p>输入选题后点击“生成脚本与分镜预览”，这里会出现批量任务。</p></div>
         ) : (
           <div className="job-grid">{jobs.map((job, index) => (
             <article className={`job-card status-${job.status}`} key={job.localId}>
-              <div className="job-card-top"><span className="job-index">{String(index + 1).padStart(2, '0')}</span><span className="status-pill">{['submitting', 'queued', 'running'].includes(job.status) && <LoaderCircle className="spin" size={13} />}{job.status === 'succeeded' && <CheckCircle2 size={13} />}{job.status === 'failed' && <CircleAlert size={13} />}{statusLabel(job.status)}</span></div>
+              <div className="job-card-top"><span className="job-index">{String(index + 1).padStart(2, '0')}</span><span className="status-pill">{['submitting', 'queued', 'running'].includes(job.status) ? <LoaderCircle className="spin" size={13} /> : null}{job.status === 'succeeded' ? <CheckCircle2 size={13} /> : null}{job.status === 'failed' ? <CircleAlert size={13} /> : null}{statusLabel(job.status)}</span></div>
               <h3>{job.title}</h3><p className="scene-tag">📍 {job.scene}</p>
               <JobContentEditor
                 content={job}
@@ -572,24 +603,24 @@ export default function Page() {
                 onEditingChange={handleEditingChange}
                 onSave={(content) => updateJob(job.localId, content)}
               />
-              {job.taskId && <p className="task-id">Task · {job.taskId}</p>}
-              {job.error && <p className="error-message">{job.error}</p>}
-              {!job.videoUrl && job.taskId && job.status === 'succeeded' && <button className="recovery-action" type="button" disabled={job.isRecoveringVideo} onClick={() => recoverVideoAndGenerateSubtitles(job)}>{job.isRecoveringVideo ? <LoaderCircle className="spin" size={18} /> : <WandSparkles size={18} />}{job.isRecoveringVideo ? '正在找回原片…' : '原片已失效 · 点击生成带字幕视频'}</button>}
-              {!job.videoUrl && job.subtitleError && <p className="error-message">字幕：{job.subtitleError}</p>}
-              {job.videoUrl && <div className="video-result">
+              {job.taskId ? <p className="task-id">Task · {job.taskId}</p> : null}
+              {job.error ? <p className="error-message">{job.error}</p> : null}
+              {!job.videoUrl && job.taskId && job.status === 'succeeded' ? <button className="recovery-action" type="button" disabled={job.isRecoveringVideo} onClick={() => recoverVideoAndGenerateSubtitles(job)}>{job.isRecoveringVideo ? <LoaderCircle className="spin" size={18} /> : <WandSparkles size={18} />}{job.isRecoveringVideo ? '正在找回原片…' : '原片已失效 · 点击生成带字幕视频'}</button> : null}
+              {!job.videoUrl && job.subtitleError ? <p className="error-message">字幕：{job.subtitleError}</p> : null}
+              {job.videoUrl ? <div className="video-result">
                 <video src={job.videoUrl} controls preload="metadata" onError={() => updateJob(job.localId, { videoUrl: undefined, subtitleError: '无字幕原片链接已失效，可点击按钮尝试从 Seedance 任务找回。' })} />
                 <div className="result-actions">
                   <a href={job.videoUrl} target="_blank" rel="noreferrer"><Download size={16} /> 下载无字幕原片</a>
                   {job.subtitleStatus === 'succeeded'
                     ? <><button type="button" onClick={() => downloadSrt(job)}><Download size={16} /> 下载中文字幕 SRT</button><button type="button" disabled={job.isBurningSubtitles} onClick={() => burnSubtitles(job)}>{job.isBurningSubtitles ? <LoaderCircle className="spin" size={16} /> : <WandSparkles size={16} />}{job.isBurningSubtitles ? '正在合成字幕…' : '生成带字幕成片'}</button></>
-                    : <button type="button" disabled={job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running'} onClick={() => generateSubtitles(job, job.videoUrl!)}>{job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running' ? <LoaderCircle className="spin" size={16} /> : <WandSparkles size={16} />}{job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running' ? '正在识别字幕…' : '生成中文字幕'}</button>}
+                    : <button type="button" disabled={job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running'} onClick={() => generateSubtitles(job, job.videoUrl ?? '')}>{job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running' ? <LoaderCircle className="spin" size={16} /> : <WandSparkles size={16} />}{job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running' ? '正在识别字幕…' : '生成中文字幕'}</button>}
                 </div>
-                {(job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running') && <p className="subtitle-progress"><LoaderCircle className="spin" size={14} /> 无字幕原片已完成，有字幕版正在识别口播与时间轴…</p>}
-                {job.isBurningSubtitles && <p className="subtitle-progress"><LoaderCircle className="spin" size={14} /> 字幕识别已完成，正在合成重点彩色字幕成片…</p>}
-                {job.captionedVideoUrl && <div className="captioned-result"><strong>带字幕成片</strong><video src={job.captionedVideoUrl} controls preload="metadata" /><a href={job.captionedVideoUrl} download={`${job.title || 'biscuit'}-带字幕.mp4`}><Download size={16} /> 下载带字幕成片</a></div>}
-                {job.subtitleError && <p className="error-message">字幕：{job.subtitleError}</p>}
-                {job.recognizedSubtitles && <details><summary>查看识别后的中文字幕</summary><pre>{job.recognizedSubtitles}</pre></details>}
-              </div>}
+                {(job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running') ? <p className="subtitle-progress"><LoaderCircle className="spin" size={14} /> 无字幕原片已完成，有字幕版正在识别口播与时间轴…</p> : null}
+                {job.isBurningSubtitles ? <p className="subtitle-progress"><LoaderCircle className="spin" size={14} /> 字幕识别已完成，正在合成重点彩色字幕成片…</p> : null}
+                {job.captionedVideoUrl ? <div className="captioned-result"><strong>带字幕成片</strong><video src={job.captionedVideoUrl} controls preload="metadata" /><a href={job.captionedVideoUrl} download={`${job.title || 'biscuit'}-带字幕.mp4`}><Download size={16} /> 下载带字幕成片</a></div> : null}
+                {job.subtitleError ? <p className="error-message">字幕：{job.subtitleError}</p> : null}
+                {job.recognizedSubtitles ? <details><summary>查看识别后的中文字幕</summary><pre>{job.recognizedSubtitles}</pre></details> : null}
+              </div> : null}
             </article>
           ))}</div>
         )}

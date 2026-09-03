@@ -2,12 +2,16 @@ import re
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 sys.modules.setdefault("imageio_ffmpeg", types.SimpleNamespace())
 
 from main import (
     ASS_LINE_WIDTH,
+    DIALOGUE_PARTNERS,
     MIN_SUBTITLE_SEGMENT_MS,
+    GenerateScriptRequest,
+    build_script_instruction,
     split_subtitle_utterance,
     subtitle_text_width,
     utterances_to_ass,
@@ -36,6 +40,52 @@ def parse_srt(srt):
         match = SRT_TIMING_RE.fullmatch(lines[1])
         cues.append((srt_milliseconds(match.groups()[:4]), srt_milliseconds(match.groups()[4:]), lines[2:]))
     return cues
+
+
+class ScriptModeTest(unittest.TestCase):
+    def make_payload(self, **overrides):
+        values = {
+            "api_key": "test-key-123",
+            "topic": "Could you 和 Can you 的语气差异",
+            "scene": "咖啡店柜台",
+        }
+        values.update(overrides)
+        return GenerateScriptRequest(**values)
+
+    def test_default_mode_keeps_knowledge_template(self):
+        payload = self.make_payload()
+        self.assertEqual(payload.content_mode, "knowledge")
+        instruction = build_script_instruction(payload)
+        self.assertIn("知识讲解约占 70%", instruction)
+        self.assertIn("画外成年男声", instruction)
+        self.assertNotIn("本条唯一对话伙伴", instruction)
+
+    def test_rejects_unknown_mode(self):
+        with self.assertRaises(ValueError):
+            self.make_payload(content_mode="lecture")
+
+    def test_dialogue_mode_uses_dialogue_template(self):
+        partner = DIALOGUE_PARTNERS[1]
+        with patch("main.select_dialogue_partner", return_value=partner):
+            instruction = build_script_instruction(self.make_payload(content_mode="dialogue"))
+        self.assertIn("真实可用的情景对话占 70%～80%", instruction)
+        self.assertIn("6～10 轮短台词", instruction)
+        self.assertIn("4～6 段连续分镜", instruction)
+        self.assertIn("只有当前说话角色动嘴", instruction)
+        self.assertIn("不得生成任何文字、字幕、标题、单词、Logo 或水印", instruction)
+
+    def test_each_random_partner_is_fully_locked_and_exclusive(self):
+        for partner in DIALOGUE_PARTNERS:
+            with self.subTest(partner=partner["name"]):
+                with patch("main.select_dialogue_partner", return_value=partner):
+                    instruction = build_script_instruction(self.make_payload(content_mode="dialogue"))
+                self.assertIn(partner["name"], instruction)
+                self.assertIn(partner["appearance"], instruction)
+                self.assertIn(partner["voice"], instruction)
+                self.assertIn("不得出现第三只动物", instruction)
+                for other in DIALOGUE_PARTNERS:
+                    if other is not partner:
+                        self.assertNotIn(other["name"], instruction)
 
 
 class SubtitleFormattingTest(unittest.TestCase):
