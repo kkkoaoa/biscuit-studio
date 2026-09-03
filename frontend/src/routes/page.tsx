@@ -50,7 +50,7 @@ type VideoJob = {
   localId: string;
   topic: string;
   scene: string;
-  contentMode?: ContentMode;
+  contentMode: ContentMode;
   title: string;
   script: string;
   storyboard?: string;
@@ -62,7 +62,7 @@ type VideoJob = {
   subtitleTaskId?: string;
   subtitleStatus?: 'submitting' | 'running' | 'succeeded' | 'failed';
   recognizedSubtitles?: string;
-  recognizedUtterances?: Array<{ text: string; start_time: number; end_time: number }>;
+  recognizedUtterances?: Array<{ text: string; translation?: string; start_time: number; end_time: number }>;
   srt?: string;
   captionedVideoUrl?: string;
   isBurningSubtitles?: boolean;
@@ -83,7 +83,8 @@ type ScriptResponse = {
 type SubtitleResponse = {
   id: string;
   status: 'queued' | 'running' | 'succeeded';
-  utterances?: Array<{ text: string; start_time: number; end_time: number }>;
+  content_mode: ContentMode;
+  utterances?: Array<{ text: string; translation?: string; start_time: number; end_time: number }>;
   srt?: string;
 };
 
@@ -104,6 +105,7 @@ function loadHistory(): VideoJob[] {
       .filter((job) => typeof job.localId === 'string')
       .map((job) => ({
         ...job,
+        contentMode: job.contentMode === 'dialogue' ? 'dialogue' : 'knowledge',
         savedAt: typeof job.savedAt === 'number' ? job.savedAt : now,
         captionedVideoUrl: job.captionedVideoUrl?.startsWith('blob:') ? undefined : job.captionedVideoUrl,
         isBurningSubtitles: false,
@@ -333,16 +335,23 @@ export default function Page() {
       const created = await apiRequest<SubtitleResponse>('/api/v1/subtitles/tasks', {
         video_url: videoUrl,
         expected_text: job.subtitles || job.script,
+        content_mode: job.contentMode,
       });
       if (!created.id) throw new Error('字幕接口未返回任务 ID');
       updateJob(job.localId, { subtitleStatus: 'running', subtitleTaskId: created.id });
       for (let attempt = 0; attempt < 60; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 4000));
-        const result = await apiRequest<SubtitleResponse>('/api/v1/subtitles/status', { task_id: created.id });
+        const result = await apiRequest<SubtitleResponse>('/api/v1/subtitles/status', {
+          task_id: created.id,
+          expected_text: job.subtitles || job.script,
+          content_mode: job.contentMode,
+        });
         if (result.status === 'succeeded') {
           const recognizedUtterances = result.utterances || [];
           const srt = result.srt || '';
-          const recognizedSubtitles = recognizedUtterances.map((item) => item.text).join('\n');
+          const recognizedSubtitles = recognizedUtterances
+            .map((item) => item.translation ? `${item.text}\n${item.translation}` : item.text)
+            .join('\n');
           updateJob(job.localId, {
             subtitleStatus: 'succeeded',
             recognizedSubtitles,
@@ -380,7 +389,11 @@ export default function Page() {
       const response = await fetch(`${API_BASE}/api/v1/subtitles/burn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ video_url: job.videoUrl, utterances: job.recognizedUtterances }),
+        body: JSON.stringify({
+          video_url: job.videoUrl,
+          utterances: job.recognizedUtterances,
+          content_mode: job.contentMode,
+        }),
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
@@ -405,7 +418,11 @@ export default function Page() {
     }
     updateJob(job.localId, { isRecoveringVideo: true, subtitleError: undefined });
     try {
-      const result = await apiRequest('/api/v1/seedance/status', { api_key: apiKey, task_id: job.taskId });
+      const result = await apiRequest('/api/v1/seedance/status', {
+        api_key: apiKey,
+        task_id: job.taskId,
+        content_mode: job.contentMode,
+      });
       const videoUrl = result.content?.video_url;
       if (result.status?.toLowerCase() !== 'succeeded' || !videoUrl) {
         throw new Error('暂时无法从 Seedance 任务中找回原片，请稍后重试。');
@@ -425,7 +442,11 @@ export default function Page() {
   const pollTask = async (job: VideoJob, taskId: string) => {
     for (let attempt = 0; attempt < 90 && !stopRef.current; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL));
-      const result = await apiRequest('/api/v1/seedance/status', { api_key: apiKey, task_id: taskId });
+      const result = await apiRequest('/api/v1/seedance/status', {
+        api_key: apiKey,
+        task_id: taskId,
+        content_mode: job.contentMode,
+      });
       const status = result.status?.toLowerCase();
       if (status === 'succeeded') {
         const videoUrl = result.content?.video_url;
@@ -455,6 +476,7 @@ export default function Page() {
         generate_audio: true,
         watermark: false,
         seed: -1,
+        content_mode: job.contentMode,
       });
       if (!created.id) throw new Error('接口未返回任务 ID');
       updateJob(job.localId, { status: 'queued', taskId: created.id });
@@ -612,8 +634,8 @@ export default function Page() {
                 <div className="result-actions">
                   <a href={job.videoUrl} target="_blank" rel="noreferrer"><Download size={16} /> 下载无字幕原片</a>
                   {job.subtitleStatus === 'succeeded'
-                    ? <><button type="button" onClick={() => downloadSrt(job)}><Download size={16} /> 下载中文字幕 SRT</button><button type="button" disabled={job.isBurningSubtitles} onClick={() => burnSubtitles(job)}>{job.isBurningSubtitles ? <LoaderCircle className="spin" size={16} /> : <WandSparkles size={16} />}{job.isBurningSubtitles ? '正在合成字幕…' : '生成带字幕成片'}</button></>
-                    : <button type="button" disabled={job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running'} onClick={() => generateSubtitles(job, job.videoUrl ?? '')}>{job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running' ? <LoaderCircle className="spin" size={16} /> : <WandSparkles size={16} />}{job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running' ? '正在识别字幕…' : '生成中文字幕'}</button>}
+                    ? <><button type="button" onClick={() => downloadSrt(job)}><Download size={16} /> 下载{job.contentMode === 'dialogue' ? '中英双语' : '中文'} SRT</button><button type="button" disabled={job.isBurningSubtitles} onClick={() => burnSubtitles(job)}>{job.isBurningSubtitles ? <LoaderCircle className="spin" size={16} /> : <WandSparkles size={16} />}{job.isBurningSubtitles ? '正在合成字幕…' : '生成带字幕成片'}</button></>
+                    : <button type="button" disabled={job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running'} onClick={() => generateSubtitles(job, job.videoUrl ?? '')}>{job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running' ? <LoaderCircle className="spin" size={16} /> : <WandSparkles size={16} />}{job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running' ? '正在识别字幕…' : `生成${job.contentMode === 'dialogue' ? '中英双语' : '中文'}字幕`}</button>}
                 </div>
                 {(job.subtitleStatus === 'submitting' || job.subtitleStatus === 'running') ? <p className="subtitle-progress"><LoaderCircle className="spin" size={14} /> 无字幕原片已完成，有字幕版正在识别口播与时间轴…</p> : null}
                 {job.isBurningSubtitles ? <p className="subtitle-progress"><LoaderCircle className="spin" size={14} /> 字幕识别已完成，正在合成重点彩色字幕成片…</p> : null}

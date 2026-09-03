@@ -8,11 +8,20 @@ sys.modules.setdefault("imageio_ffmpeg", types.SimpleNamespace())
 
 from main import (
     ASS_LINE_WIDTH,
+    BurnSubtitlesRequest,
+    CreateVideoRequest,
     DIALOGUE_PARTNERS,
     MIN_SUBTITLE_SEGMENT_MS,
+    SubtitleStatusRequest,
+    SubtitleSubmitRequest,
+    TaskStatusRequest,
     GenerateScriptRequest,
     build_script_instruction,
     clean_expected_subtitle_text,
+    expected_subtitle_text,
+    map_dialogue_translations,
+    normalize_dialogue_subtitles,
+    split_dialogue_utterance,
     split_subtitle_utterance,
     subtitle_text_width,
     utterances_to_ass,
@@ -249,6 +258,66 @@ class SubtitleFormattingTest(unittest.TestCase):
             self.assertEqual(previous[1], current[0])
             self.assertLessEqual(previous[0], previous[1])
         self.assertLessEqual(cues[-1][0], cues[-1][1])
+
+
+class BilingualDialogueRegressionTest(unittest.TestCase):
+    def test_all_legacy_requests_default_to_knowledge(self):
+        self.assertEqual(CreateVideoRequest(api_key="test-key-123", prompt="long enough prompt").content_mode, "knowledge")
+        self.assertEqual(TaskStatusRequest(api_key="test-key-123", task_id="task").content_mode, "knowledge")
+        self.assertEqual(SubtitleSubmitRequest(video_url="https://example.com/video.mp4").content_mode, "knowledge")
+        self.assertEqual(SubtitleStatusRequest(task_id="ata:task").content_mode, "knowledge")
+        self.assertEqual(BurnSubtitlesRequest(video_url="https://example.com/video.mp4", utterances=[{"text": "hi"}]).content_mode, "knowledge")
+
+    def test_dialogue_expected_text_excludes_translation_and_speakers(self):
+        source = "【小饼干】：Could you help me? ||| 你能帮我吗？\n[小猫]: Of course. ||| 当然可以。"
+        normalized = normalize_dialogue_subtitles(source)
+        expected = expected_subtitle_text(normalized, "dialogue")
+        self.assertEqual(expected, "Could you help me?\nOf course.")
+        self.assertNotRegex(expected, r"[\u3400-\u9fff]")
+        self.assertNotIn("小饼干", normalized)
+        self.assertNotIn("小猫", normalized)
+
+    def test_knowledge_remains_single_line_without_translation(self):
+        utterances = [{"start_time": 0, "end_time": 2000, "text": "先学【重点】could you，再看例句。", "translation": "不应显示"}]
+        srt = utterances_to_srt(utterances)
+        ass = utterances_to_ass(utterances)
+        self.assertEqual(len(parse_srt(srt)[0][2]), 1)
+        self.assertNotIn("不应显示", srt + ass)
+        self.assertNotIn(r"\N", ass)
+
+    def test_dialogue_is_english_first_chinese_second_and_highlighted(self):
+        utterances = [{"start_time": 0, "end_time": 2000, "text": "Could you help me?", "translation": "你能帮我吗？"}]
+        srt = utterances_to_srt(utterances, "dialogue")
+        ass = utterances_to_ass(utterances, "dialogue")
+        self.assertEqual(parse_srt(srt)[0][2], ["Could you help me?", "你能帮我吗？"])
+        self.assertIn(r"{\c&H00A5FF&}Could you help me{\c&HFFFFFF&}", ass)
+        self.assertIn(r"\N{\rDefault\fs40", ass)
+        self.assertNotIn("，", srt)
+        self.assertNotIn("。", srt)
+
+    def test_mapping_failure_drops_translation_safely(self):
+        pairs = "Could you help me? ||| 你能帮我吗？"
+        mapped = map_dialogue_translations([{"start_time": 0, "end_time": 1000, "text": "Totally unrelated words"}], pairs)
+        self.assertEqual(mapped[0]["translation"], "")
+        self.assertNotIn(r"\N", utterances_to_ass(mapped, "dialogue"))
+
+    def test_long_dialogue_splits_pairs_without_orphans(self):
+        utterance = {
+            "start_time": 0,
+            "end_time": 6000,
+            "text": "Could you please help me find the nearest train station before it gets dark tonight",
+            "translation": "天黑之前你能帮我找到最近的火车站吗",
+        }
+        segments = split_dialogue_utterance(utterance)
+        self.assertGreater(len(segments), 1)
+        self.assertTrue(all(segment["translation"] for segment in segments))
+        self.assertTrue(all(len(CJK_RE.findall(segment["translation"])) >= 2 for segment in segments))
+        srt = utterances_to_srt([utterance], "dialogue")
+        self.assertTrue(all(len(lines) == 2 for _, _, lines in parse_srt(srt)))
+
+    def test_short_dialogue_does_not_split(self):
+        utterance = {"start_time": 0, "end_time": 2000, "text": "I am on my way to you", "translation": "我正在去找你的路上"}
+        self.assertEqual(len(split_dialogue_utterance(utterance)), 1)
 
 
 if __name__ == "__main__":

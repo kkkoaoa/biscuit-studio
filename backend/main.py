@@ -1,4 +1,5 @@
 import base64
+import difflib
 import json
 import logging
 import os
@@ -60,25 +61,31 @@ class CreateVideoRequest(BaseModel):
     generate_audio: bool = True
     watermark: bool = False
     seed: int = -1
+    content_mode: str = Field("knowledge", regex=r"^(knowledge|dialogue)$")
 
 
 class TaskStatusRequest(BaseModel):
     api_key: str = Field(..., min_length=8)
     task_id: str = Field(..., min_length=1)
+    content_mode: str = Field("knowledge", regex=r"^(knowledge|dialogue)$")
 
 
 class SubtitleSubmitRequest(BaseModel):
     video_url: str = Field(..., min_length=10, max_length=4000)
     expected_text: Optional[str] = Field(None, max_length=12000)
+    content_mode: str = Field("knowledge", regex=r"^(knowledge|dialogue)$")
 
 
 class SubtitleStatusRequest(BaseModel):
     task_id: str = Field(..., min_length=1, max_length=220)
+    expected_text: Optional[str] = Field(None, max_length=12000)
+    content_mode: str = Field("knowledge", regex=r"^(knowledge|dialogue)$")
 
 
 class BurnSubtitlesRequest(BaseModel):
     video_url: str = Field(..., min_length=10, max_length=4000)
     utterances: List[Dict[str, Any]] = Field(..., min_items=1, max_items=200)
+    content_mode: str = Field("knowledge", regex=r"^(knowledge|dialogue)$")
 
 
 class ModelTestRequest(BaseModel):
@@ -201,6 +208,8 @@ BREAK_AFTER_PUNCTUATION = set("，。！？；：、,.!?;:）)]}》〉」』”�
 PHRASE_BOUNDARY_CHARACTERS = set("的了呢吗吧啊呀和与但而在把被让给是有到从向对将就也都又再")
 SUBTITLE_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*|\s+|.", re.DOTALL)
 LATIN_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*")
+DIALOGUE_PAIR_SEPARATOR = " ||| "
+DIALOGUE_PAIR_RE = re.compile(r"\s*(?:\|{2,3}|\t)\s*")
 
 
 def strip_subtitle_speaker_labels(text: str) -> str:
@@ -403,6 +412,84 @@ def split_subtitle_utterances(utterances: List[Dict[str, Any]]) -> List[Dict[str
     return result
 
 
+def _split_translation_for_fragments(text: str, count: int) -> List[str]:
+    """Split one concise translation into exactly ``count`` readable, non-orphan lines."""
+    rendered = subtitle_display_text(text)
+    max_width = ASS_LINE_WIDTH * (SUBTITLE_FONT_SIZE_PX / 40.0)
+    if count <= 1:
+        return [rendered] if rendered and subtitle_text_width(rendered) <= max_width else []
+    characters = list(rendered)
+    if len(characters) < count * 2:
+        return []
+    states: Dict[tuple, tuple] = {(0, 0): (0.0, [])}
+    target_width = subtitle_text_width(rendered) / count
+    for used in range(count):
+        for start in range(len(characters)):
+            state = states.get((used, start))
+            if state is None:
+                continue
+            old_cost, old_parts = state
+            minimum_end = start + 2
+            maximum_end = len(characters) - 2 * (count - used - 1)
+            for end in range(minimum_end, maximum_end + 1):
+                fragment = "".join(characters[start:end]).strip()
+                width = subtitle_text_width(fragment)
+                if not fragment or width > max_width:
+                    continue
+                if used + 1 == count and end != len(characters):
+                    continue
+                if used + 1 < count and end == len(characters):
+                    continue
+                boundary_bonus = -4.0 if characters[end - 1] in BREAK_AFTER_PUNCTUATION else 0.0
+                cost = old_cost + ((width - target_width) / max_width) ** 2 * 100 + boundary_bonus
+                key = (used + 1, end)
+                if key not in states or cost < states[key][0]:
+                    states[key] = (cost, old_parts + [fragment])
+    final = states.get((count, len(characters)))
+    return final[1] if final else []
+
+
+def split_dialogue_utterance(utterance: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Split dialogue English only when it has >8 words and overflows; keep translations paired."""
+    english = subtitle_display_text(str(utterance.get("text") or ""))
+    translation = subtitle_display_text(str(utterance.get("translation") or ""))
+    if not english:
+        return []
+    word_count = len(LATIN_WORD_RE.findall(english))
+    fragments = wrap_subtitle_text(english) if word_count > 8 and subtitle_text_width(english) > ASS_LINE_WIDTH else [english]
+    translations = _split_translation_for_fragments(translation, len(fragments)) if translation else []
+    # A missing/unsafe mapping must never produce a plausible but wrong translation.
+    if len(translations) != len(fragments):
+        translations = [""] * len(fragments)
+    start = max(0, int(utterance.get("start_time") or 0))
+    end = max(start, int(utterance.get("end_time") or start))
+    if len(fragments) == 1:
+        return [{**utterance, "text": fragments[0], "translation": translations[0], "start_time": start, "end_time": end}]
+    duration = end - start
+    weights = [subtitle_reading_weight(fragment) for fragment in fragments]
+    minimum = MIN_SUBTITLE_SEGMENT_MS if duration >= len(fragments) * MIN_SUBTITLE_SEGMENT_MS else 0
+    distributable = max(0, duration - minimum * len(fragments))
+    total_weight = sum(weights)
+    boundaries = [start]
+    allocated = 0
+    for index, weight in enumerate(weights[:-1]):
+        allocated += minimum + int(round(distributable * weight / total_weight))
+        boundaries.append(min(start + allocated, end - minimum * (len(fragments) - index - 1)))
+    boundaries.append(end)
+    return [
+        {**utterance, "text": fragment, "translation": translations[index],
+         "start_time": boundaries[index], "end_time": boundaries[index + 1]}
+        for index, fragment in enumerate(fragments)
+    ]
+
+
+def split_dialogue_utterances(utterances: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    for utterance in utterances:
+        result.extend(split_dialogue_utterance(utterance))
+    return result
+
+
 def clean_expected_subtitle_text(text: str) -> str:
     """Convert the reviewed subtitle draft into plain spoken text for alignment."""
     cleaned_lines: List[str] = []
@@ -417,6 +504,74 @@ def clean_expected_subtitle_text(text: str) -> str:
     return "\n".join(cleaned_lines)
 
 
+def parse_dialogue_subtitle_pairs(text: str) -> List[Dict[str, str]]:
+    """Parse one ``English ||| 中文`` pair per line and reject unsafe/incomplete rows."""
+    pairs: List[Dict[str, str]] = []
+    for raw_line in text.splitlines():
+        line = strip_subtitle_speaker_labels(raw_line.strip())
+        if not line:
+            continue
+        parts = DIALOGUE_PAIR_RE.split(line, maxsplit=1)
+        if len(parts) != 2:
+            continue
+        english = strip_subtitle_editor_markers(parts[0])
+        chinese = strip_subtitle_editor_markers(parts[1])
+        if english and chinese and LATIN_WORD_RE.search(english) and re.search(r"[\u3400-\u9fff]", chinese):
+            pairs.append({"english": english, "chinese": chinese})
+    return pairs
+
+
+def dialogue_expected_text(text: str) -> str:
+    """Return only genuinely spoken English for forced alignment."""
+    return "\n".join(pair["english"] for pair in parse_dialogue_subtitle_pairs(text))
+
+
+def expected_subtitle_text(text: str, content_mode: str = "knowledge") -> str:
+    if content_mode == "dialogue":
+        return dialogue_expected_text(text)
+    return clean_expected_subtitle_text(text)
+
+
+def _normalized_alignment_text(text: str) -> str:
+    return " ".join(LATIN_WORD_RE.findall(strip_subtitle_editor_markers(text).lower()))
+
+
+def map_dialogue_translations(
+    utterances: List[Dict[str, Any]], expected_text: str
+) -> List[Dict[str, Any]]:
+    """Attach a translation only to a confidently matching English recognition cue."""
+    pairs = parse_dialogue_subtitle_pairs(expected_text)
+    mapped: List[Dict[str, Any]] = []
+    cursor = 0
+    for utterance in utterances:
+        result = {**utterance, "text": strip_subtitle_speaker_labels(str(utterance.get("text") or "")), "translation": ""}
+        recognized = _normalized_alignment_text(result["text"])
+        if not recognized:
+            mapped.append(result)
+            continue
+        best_index = -1
+        best_score = 0.0
+        for index in range(cursor, min(len(pairs), cursor + 3)):
+            expected = _normalized_alignment_text(pairs[index]["english"])
+            score = difflib.SequenceMatcher(None, recognized, expected).ratio()
+            if recognized in expected or expected in recognized:
+                score = max(score, 0.9)
+            if score > best_score:
+                best_index, best_score = index, score
+        if best_index >= 0 and best_score >= 0.62:
+            result["translation"] = pairs[best_index]["chinese"]
+            cursor = best_index + 1
+        mapped.append(result)
+    return mapped
+
+
+def normalize_dialogue_subtitles(text: str) -> str:
+    pairs = parse_dialogue_subtitle_pairs(text)
+    if not pairs:
+        raise HTTPException(status_code=502, detail="口语脚本未返回可解析的中英字幕对")
+    return "\n".join("{}{}{}".format(pair["english"], DIALOGUE_PAIR_SEPARATOR, pair["chinese"]) for pair in pairs)
+
+
 def format_srt_time(milliseconds: int) -> str:
     milliseconds = max(0, int(milliseconds))
     hours, remainder = divmod(milliseconds, 3600000)
@@ -425,12 +580,16 @@ def format_srt_time(milliseconds: int) -> str:
     return "{:02d}:{:02d}:{:02d},{:03d}".format(hours, minutes, seconds, millis)
 
 
-def utterances_to_srt(utterances: List[Dict[str, Any]]) -> str:
+def utterances_to_srt(utterances: List[Dict[str, Any]], content_mode: str = "knowledge") -> str:
     blocks: List[str] = []
-    for index, utterance in enumerate(split_subtitle_utterances(utterances), start=1):
+    normalized = split_dialogue_utterances(utterances) if content_mode == "dialogue" else split_subtitle_utterances(utterances)
+    for index, utterance in enumerate(normalized, start=1):
         start = format_srt_time(utterance["start_time"])
         end = format_srt_time(utterance["end_time"])
-        blocks.append("{}\n{} --> {}\n{}".format(index, start, end, utterance["text"]))
+        text = utterance["text"]
+        if content_mode == "dialogue" and utterance.get("translation"):
+            text = "{}\n{}".format(text, utterance["translation"])
+        blocks.append("{}\n{} --> {}\n{}".format(index, start, end, text))
     return "\n\n".join(blocks)
 
 
@@ -448,7 +607,13 @@ def highlight_english_for_ass(text: str) -> str:
     return re.sub(pattern, lambda match: r"{\c&H00A5FF&}" + match.group(0) + r"{\c&HFFFFFF&}", safe)
 
 
-def utterances_to_ass(utterances: List[Dict[str, Any]]) -> str:
+def utterances_to_ass(utterances: List[Dict[str, Any]], content_mode: str = "knowledge") -> str:
+    dialogue_style = content_mode == "dialogue"
+    style = (
+        "Style: Default,Noto Sans CJK SC,46,&H00FFFFFF,&H0000A5FF,&H00151515,&H90000000,-1,0,0,0,100,100,0,0,1,3,1,2,48,48,205,1"
+        if dialogue_style else
+        "Style: Default,Noto Sans CJK SC,56,&H00FFFFFF,&H0000A5FF,&H00151515,&H90000000,-1,0,0,0,100,100,0,0,1,3,1,2,48,48,230,1"
+    )
     header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 720
@@ -458,16 +623,20 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Noto Sans CJK SC,56,&H00FFFFFF,&H0000A5FF,&H00151515,&H90000000,-1,0,0,0,100,100,0,0,1,3,1,2,48,48,230,1
+{}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
+""".format(style)
     lines: List[str] = []
-    for utterance in split_subtitle_utterances(utterances):
+    normalized = split_dialogue_utterances(utterances) if dialogue_style else split_subtitle_utterances(utterances)
+    for utterance in normalized:
         start = format_ass_time(utterance["start_time"])
         end = format_ass_time(utterance["end_time"])
         ass_text = highlight_english_for_ass(utterance["text"])
+        if dialogue_style and utterance.get("translation"):
+            chinese = str(utterance["translation"]).replace("{", "（").replace("}", "）")
+            ass_text = r"{\q2}" + ass_text + r"\N{\rDefault\fs40\c&HFFFFFF&}" + chinese
         lines.append("Dialogue: 0,{},{},Default,,0,0,0,,{}".format(start, end, ass_text))
     return header + "\n".join(lines) + "\n"
 
@@ -651,7 +820,10 @@ def register_routes(app: FastAPI) -> None:
         if any(not isinstance(result.get(key), str) or not result[key].strip() for key in required):
             raise HTTPException(status_code=502, detail="语言模型返回内容缺少脚本、分镜或字幕稿")
         cleaned_result = {key: result[key].strip() for key in required}
-        cleaned_result["subtitles"] = clean_expected_subtitle_text(cleaned_result["subtitles"])
+        if payload.content_mode == "dialogue":
+            cleaned_result["subtitles"] = normalize_dialogue_subtitles(cleaned_result["subtitles"])
+        else:
+            cleaned_result["subtitles"] = clean_expected_subtitle_text(cleaned_result["subtitles"])
         return cleaned_result
 
     @app.post("/api/v1/seedance/tasks")
@@ -675,7 +847,9 @@ def register_routes(app: FastAPI) -> None:
             )
         if response.status_code >= 400:
             raise ark_error(response)
-        return response.json()
+        result = response.json()
+        result["content_mode"] = payload.content_mode
+        return result
 
     @app.post("/api/v1/seedance/status")
     async def get_seedance_status(payload: TaskStatusRequest):
@@ -687,7 +861,9 @@ def register_routes(app: FastAPI) -> None:
             )
         if response.status_code >= 400:
             raise ark_error(response)
-        return response.json()
+        result = response.json()
+        result["content_mode"] = payload.content_mode
+        return result
     @app.post("/api/v1/subtitles/tasks")
     async def create_subtitle_task(payload: SubtitleSubmitRequest):
         if not payload.video_url.lower().startswith("https://"):
@@ -702,7 +878,7 @@ def register_routes(app: FastAPI) -> None:
             if len(video_response.content) > 100 * 1024 * 1024:
                 raise HTTPException(status_code=413, detail="视频文件过大，暂不支持自动生成字幕")
             audio_bytes = extract_audio_from_video(video_response.content)
-            expected_text = clean_expected_subtitle_text(payload.expected_text or "")
+            expected_text = expected_subtitle_text(payload.expected_text or "", payload.content_mode)
             if expected_text:
                 response = await client.post(
                     "https://openspeech.bytedance.com/api/v1/vc/ata/submit",
@@ -741,7 +917,7 @@ def register_routes(app: FastAPI) -> None:
         task_id = body.get("id")
         if not task_id:
             raise HTTPException(status_code=502, detail="字幕服务未返回任务 ID")
-        return {"id": "{}{}".format(task_prefix, task_id), "status": "queued"}
+        return {"id": "{}{}".format(task_prefix, task_id), "status": "queued", "content_mode": payload.content_mode}
 
     @app.post("/api/v1/subtitles/status")
     async def get_subtitle_status(payload: SubtitleStatusRequest):
@@ -771,16 +947,19 @@ def register_routes(app: FastAPI) -> None:
         except (TypeError, ValueError):
             code = -1
         if code == 2000:
-            return {"id": payload.task_id, "status": "running"}
+            return {"id": payload.task_id, "status": "running", "content_mode": payload.content_mode}
         if response.status_code >= 400 or code != 0:
             raise subtitle_error(body)
         utterances = body.get("utterances") or []
+        if payload.content_mode == "dialogue":
+            utterances = map_dialogue_translations(utterances, payload.expected_text or "")
         return {
             "id": payload.task_id,
             "status": "succeeded",
+            "content_mode": payload.content_mode,
             "duration": body.get("duration"),
             "utterances": utterances,
-            "srt": utterances_to_srt(utterances),
+            "srt": utterances_to_srt(utterances, payload.content_mode),
         }
     @app.post("/api/v1/subtitles/burn")
     async def burn_subtitles(payload: BurnSubtitlesRequest):
@@ -801,7 +980,7 @@ def register_routes(app: FastAPI) -> None:
             with open(video_path, "wb") as video_file:
                 video_file.write(video_response.content)
             with open(subtitle_path, "w", encoding="utf-8") as subtitle_file:
-                subtitle_file.write(utterances_to_ass(payload.utterances))
+                subtitle_file.write(utterances_to_ass(payload.utterances, payload.content_mode))
             fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
             command = [
                 imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-i", video_path,
