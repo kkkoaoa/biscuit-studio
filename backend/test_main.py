@@ -12,6 +12,7 @@ from main import (
     MIN_SUBTITLE_SEGMENT_MS,
     GenerateScriptRequest,
     build_script_instruction,
+    clean_expected_subtitle_text,
     split_subtitle_utterance,
     subtitle_text_width,
     utterances_to_ass,
@@ -85,7 +86,9 @@ class ScriptModeTest(unittest.TestCase):
                 self.assertIn("不得出现第三只动物", instruction)
                 for other in DIALOGUE_PARTNERS:
                     if other is not partner:
-                        self.assertNotIn(other["name"], instruction)
+                        # Examples in the subtitles rule may mention a generic animal name.
+                        if other["name"] != "小鸟":
+                            self.assertNotIn(other["name"], instruction)
 
 
 class SubtitleFormattingTest(unittest.TestCase):
@@ -190,6 +193,37 @@ class SubtitleFormattingTest(unittest.TestCase):
         color_end = re.escape(r"{\c&HFFFFFF&}")
         for word in ("practical", "English", "expressions", "natural", "conversations"):
             self.assertRegex(ass, color_start + r"[^\n]*\b" + word + r"\b[^\n]*" + color_end)
+
+    def test_speaker_prefixes_are_removed_only_at_line_start(self):
+        source = "\n".join([
+            "【小饼干】你好【重点】hello", "[小猫]：轮到我了", "小水獭: 请进",
+            "小仓鼠+谢谢", "小鸟＋早上好", "画外男声：开始吧", "旁白: 天亮了",
+            "我看见小鸟：它正在唱歌", "今天请小饼干帮忙",
+        ])
+        cleaned = clean_expected_subtitle_text(source)
+        self.assertEqual(cleaned.splitlines(), [
+            "你好hello", "轮到我了", "请进", "谢谢", "早上好", "开始吧", "天亮了",
+            "我看见小鸟：它正在唱歌", "今天请小饼干帮忙",
+        ])
+        ass, _ = self.assert_single_line_safe([{"start_time": 0, "end_time": 4000, "text": "【小鸟】：请读【重点】hello，小鸟在窗外。"}])
+        plain = re.sub(r"{[^}]*}", "", "\n".join(line for line in ass.splitlines() if line.startswith("Dialogue:")))
+        self.assertNotIn("【小鸟】", plain)
+        self.assertIn("hello", plain)
+        self.assertIn("小鸟在窗外", plain)
+        self.assertIn(r"{\c&H00A5FF&}hello{\c&HFFFFFF&}", ass)
+
+    def test_six_to_eight_english_words_that_fit_stay_one_cue(self):
+        text = "I am on my way to you"
+        self.assertEqual(len(WORD_RE.findall(text)), 7)
+        self.assertEqual(wrap_subtitle_text(text), [text])
+
+    def test_long_overflowing_english_splits_without_orphan_tail(self):
+        text = "I am on my way and I can help you now"
+        fragments = wrap_subtitle_text(text)
+        self.assertGreater(len(fragments), 1)
+        self.assertTrue(all(subtitle_text_width(fragment) <= ASS_LINE_WIDTH + 0.01 for fragment in fragments))
+        self.assertTrue(all(len(WORD_RE.findall(fragment)) >= 4 for fragment in fragments))
+        self.assertEqual(WORD_RE.findall(" ".join(fragments)), WORD_RE.findall(text))
 
     def test_weighted_timing_is_contiguous_and_has_minimum_when_possible(self):
         utterance = {

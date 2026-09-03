@@ -190,6 +190,11 @@ SUBTITLE_SIDE_MARGIN_PX = 48
 ASS_LINE_WIDTH = float(VIDEO_WIDTH_PX - 2 * SUBTITLE_SIDE_MARGIN_PX - 8)
 MIN_SUBTITLE_SEGMENT_MS = 500
 EDITOR_MARKER_RE = re.compile(r"(?:【\s*(?:重点)?\s*】|\[\s*(?:重点)?\s*\])", re.IGNORECASE)
+SUBTITLE_SPEAKER_NAMES = "小饼干|小猫|小水獭|小仓鼠|小鸟|画外男声|画外成年男声|旁白|采访者"
+SUBTITLE_SPEAKER_PREFIX_RE = re.compile(
+    r"^\s*(?:[-*\d.、]+\s*)?(?:(?:【|\[)\s*(?:" + SUBTITLE_SPEAKER_NAMES
+    + r")\s*(?:】|\])\s*[:：+＋]?|(?:" + SUBTITLE_SPEAKER_NAMES + r")\s*[:：+＋])\s*"
+)
 SUBTITLE_BRACKET_RE = re.compile(r"[【】\[\]]")
 HIDDEN_DISPLAY_PUNCTUATION = set("，。")
 BREAK_AFTER_PUNCTUATION = set("，。！？；：、,.!?;:）)]}》〉」』”’")
@@ -198,10 +203,15 @@ SUBTITLE_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*|\s+|.", r
 LATIN_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*")
 
 
+def strip_subtitle_speaker_labels(text: str) -> str:
+    """Remove known speaker labels only at the start of each subtitle line."""
+    return "\n".join(SUBTITLE_SPEAKER_PREFIX_RE.sub("", line) for line in text.splitlines())
+
+
 def strip_subtitle_editor_markers(text: str) -> str:
-    """Remove review markup and every line-breaking/bracket delimiter."""
-    cleaned = EDITOR_MARKER_RE.sub("", text)
-    cleaned = cleaned.replace("\\N", " ").replace("\\n", " ")
+    """Remove speaker/review markup and every line-breaking/bracket delimiter."""
+    cleaned = strip_subtitle_speaker_labels(text.replace("\\N", "\n").replace("\\n", "\n"))
+    cleaned = EDITOR_MARKER_RE.sub("", cleaned)
     cleaned = SUBTITLE_BRACKET_RE.sub("", cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
 
@@ -263,7 +273,7 @@ def _is_orphan_fragment(text: str, width: float, max_width: float) -> bool:
     if cjk_count and not latin_words:
         return cjk_count <= 3
     if latin_words and not cjk_count:
-        return len(latin_words) == 1 and width < max_width * 0.38
+        return len(latin_words) <= 3 and width < max_width * 0.55
     return width < max_width * 0.20
 
 
@@ -400,8 +410,7 @@ def clean_expected_subtitle_text(text: str) -> str:
         line = raw_line.strip()
         if not line:
             continue
-        line = re.sub(r"^[-*\d.、\s]+", "", line)
-        line = re.sub(r"^【(?:画外男声|采访者|小饼干)】\s*[:：]?\s*", "", line)
+        line = SUBTITLE_SPEAKER_PREFIX_RE.sub("", line)
         line = strip_subtitle_editor_markers(line)
         if line:
             cleaned_lines.append(line)
@@ -641,7 +650,9 @@ def register_routes(app: FastAPI) -> None:
         required = ("title", "script", "storyboard", "subtitles", "prompt")
         if any(not isinstance(result.get(key), str) or not result[key].strip() for key in required):
             raise HTTPException(status_code=502, detail="语言模型返回内容缺少脚本、分镜或字幕稿")
-        return {key: result[key].strip() for key in required}
+        cleaned_result = {key: result[key].strip() for key in required}
+        cleaned_result["subtitles"] = clean_expected_subtitle_text(cleaned_result["subtitles"])
+        return cleaned_result
 
     @app.post("/api/v1/seedance/tasks")
     async def create_seedance_task(payload: CreateVideoRequest):
