@@ -554,11 +554,11 @@ export default function Page() {
             <legend>内容模式</legend>
             <label className={contentMode === 'knowledge' ? 'is-active' : ''}>
               <input type="radio" name="content-mode" value="knowledge" checked={contentMode === 'knowledge'} onChange={() => setContentMode('knowledge')} />
-              <span><strong>知识讲解</strong><small>70% 知识 · 采访互动</small></span>
+              <span><strong>知识讲解</strong><small>准确知识文稿 · 采访互动</small></span>
             </label>
             <label className={contentMode === 'dialogue' ? 'is-active' : ''}>
               <input type="radio" name="content-mode" value="dialogue" checked={contentMode === 'dialogue'} onChange={() => setContentMode('dialogue')} />
-              <span><strong>口语情景对话</strong><small>双角色 · 随机伙伴</small></span>
+              <span><strong>口语情景对话</strong><small>双角色 · 可爱动物伙伴</small></span>
             </label>
           </fieldset>
           <p className="mode-note">{contentMode === 'knowledge' ? '小饼干讲透规则、例句与易错边界。' : '小饼干将和一位随机小动物伙伴完成真实口语对话。'}</p>
