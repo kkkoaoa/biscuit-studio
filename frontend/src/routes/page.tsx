@@ -222,6 +222,7 @@ export default function Page() {
             const message = error instanceof Error ? error.message : String(error);
             const isRateLimited = /TPM|Tokens Per Minute|限流|频率/i.test(message);
             const isTimeout = /生成超时|504/i.test(message);
+            const isFormatFailure = /未返回可解析的脚本|脚本格式不正确/i.test(message);
             if (isRateLimited && attempt < 2) {
               const waitSeconds = 15 * (attempt + 1);
               setPrepareError(`语言模型额度暂时繁忙，${waitSeconds} 秒后自动重试（${attempt + 1}/2）…`);
@@ -231,6 +232,11 @@ export default function Page() {
             if (isTimeout && attempt === 0) {
               setPrepareError('当前单条脚本响应较慢，3 秒后自动重试一次…');
               await new Promise((resolve) => window.setTimeout(resolve, 3000));
+              continue;
+            }
+            if (isFormatFailure && attempt === 0) {
+              setPrepareError('语言模型本次输出不完整，2 秒后自动重新生成一次…');
+              await new Promise((resolve) => window.setTimeout(resolve, 2000));
               continue;
             }
             throw error;

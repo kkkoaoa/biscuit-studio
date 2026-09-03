@@ -581,10 +581,10 @@ def register_routes(app: FastAPI) -> None:
                     ],
                 }
             ],
-            "max_output_tokens": 1000,
+            "max_output_tokens": 2200,
             "thinking": {"type": "disabled"},
         }
-        timeout = httpx.Timeout(55.0, connect=10.0)
+        timeout = httpx.Timeout(90.0, connect=10.0)
         try:
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 response = await client.post(
