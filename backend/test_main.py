@@ -68,8 +68,8 @@ class ScriptModeTest(unittest.TestCase):
         partner = DIALOGUE_PARTNERS[1]
         with patch("main.select_dialogue_partner", return_value=partner):
             instruction = build_script_instruction(self.make_payload(content_mode="dialogue"))
-        self.assertIn("真实可用的情景对话占 70%～80%", instruction)
-        self.assertIn("6～10 轮短台词", instruction)
+        self.assertIn("采用“先讲一点，再演一遍”的结构", instruction)
+        self.assertIn("5～8 轮短对话", instruction)
         self.assertIn("4～6 段连续分镜", instruction)
         self.assertIn("只有当前说话角色动嘴", instruction)
         self.assertIn("不得生成任何文字、字幕、标题、单词、Logo 或水印", instruction)
